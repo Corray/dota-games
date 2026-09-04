@@ -24,6 +24,9 @@ const HERO_BY_ID = {
 };
 const HEROES = Object.values(HERO_BY_ID);
 const OPENDOTA = 'https://api.opendota.com/api';
+const DEFAULT_PROXY = ''; // 部署 Worker 后填入，如 https://dota-match-proxy.xxx.workers.dev
+const PROXY_KEY = 'dota-proxy-url';
+const getProxy = () => (localStorage.getItem(PROXY_KEY) ?? DEFAULT_PROXY).trim().replace(/\/+$/, '');
 
 // ============ 状态 ============
 let state = load();
@@ -599,6 +602,9 @@ const extractMatchId = v => { const m = String(v || '').match(/(\d{6,})/); retur
 function guessPositions(team) {
   const byGpm = [...team].sort((a, b) => (b.gpm || 0) - (a.gpm || 0));
   const want = new Map();
+  if (team.every(p => p.position >= 1 && p.position <= 5) && new Set(team.map(p => p.position)).size === team.length) {
+    team.forEach(p => p.pos = p.position); return team;
+  }
   if (team.every(p => p.laneRole)) {
     const grp = r => byGpm.filter(p => p.laneRole === r && !p.isRoaming);
     grp(2).forEach((p, i) => want.set(p, i === 0 ? 2 : 0));
@@ -624,7 +630,7 @@ function parseOpenDotaMatch(m) {
     name: (p.personaname || '').trim() || (p.account_id ? `玩家${p.account_id}` : `匿名·${side}·${hero || (p.player_slot % 128) + 1}`),
     heroId: p.hero_id, hero,
     kda: [p.kills || 0, p.deaths || 0, p.assists || 0], gpm: p.gold_per_min || 0,
-    laneRole: p.lane_role || 0, isRoaming: !!p.is_roaming, rankTier: p.rank_tier || 0, pos: 0,
+    laneRole: p.lane_role || 0, isRoaming: !!p.is_roaming, rankTier: p.rank_tier || 0, pos: 0, position: p.position || 0,
   }; };
   const isRad = p => (typeof p.isRadiant === 'boolean' ? p.isRadiant : p.player_slot < 128);
   return {
@@ -638,16 +644,48 @@ async function fetchOpenDota() {
   const id = extractMatchId($('#m-id').value);
   if (!id) return toast('请先在「比赛 ID」填入 OpenDota 比赛编号或链接', 'err');
   const btn = $('#btn-opendota'); btn.disabled = true; btn.textContent = '拉取中…';
+  const fetchT = (url, ms) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t)); };
+  const errs = [];
   try {
-    const res = await fetch(`${OPENDOTA}/matches/${id}`);
-    if (res.status === 404) throw new Error('OpenDota 上没有这场比赛');
-    if (res.status === 429) throw new Error('请求太频繁，稍后再试');
-    if (!res.ok) throw new Error('接口返回 ' + res.status);
-    const m = await res.json();
-    if (!Array.isArray(m.players) || m.players.length < 2) throw new Error('比赛数据不完整，OpenDota 可能还没收录');
-    showImportModal(parseOpenDotaMatch(m));
+    let m = null;
+    const proxy = getProxy();
+    if (proxy) {
+      try {
+        const res = await fetchT(`${proxy}/match/${id}`, 30000);
+        const body = await res.json().catch(() => ({}));
+        if (res.ok) m = body;
+        else if (res.status === 404) throw Object.assign(new Error(body.error || '没有这场比赛'), { fatal: true });
+        else throw new Error(body.error ? `${body.error}（${(body.errors || []).join('；')}）` : '中转返回 ' + res.status);
+      } catch (e) { if (e.fatal) throw e; errs.push('中转：' + (e.name === 'AbortError' ? '超时' : e.message)); }
+    }
+    if (!m) {
+      try {
+        const res = await fetchT(`${OPENDOTA}/matches/${id}`, 15000);
+        if (res.status === 404) throw new Error('OpenDota 上没有这场比赛');
+        if (res.status === 429) throw new Error('请求太频繁');
+        if (!res.ok) throw new Error('返回 ' + res.status);
+        m = await res.json(); m.source = m.source || 'opendota';
+      } catch (e) { errs.push('OpenDota 直连：' + (e.name === 'AbortError' ? '超时' : e.message)); }
+    }
+    if (!m) throw new Error(errs.join('；'));
+    if (!Array.isArray(m.players) || m.players.length < 2) throw new Error('比赛数据不完整，可能还没同步');
+    const parsed = parseOpenDotaMatch(m);
+    parsed.source = m.source === 'steam' ? 'Valve 官方接口' : 'OpenDota';
+    parsed.via = proxy && !errs.some(e => e.startsWith('中转')) ? '中转' : '直连';
+    parsed.enriched = m.enriched || [];
+    showImportModal(parsed);
   } catch (e) { toast('拉取失败：' + (e.message || e), 'err'); }
   finally { btn.disabled = false; btn.textContent = '从 OpenDota 拉取'; }
+}
+// 中转地址设置（存在本浏览器）
+function configProxy() {
+  const cur = getProxy();
+  const v = prompt('比赛数据中转地址（Cloudflare Worker）。留空则直连 OpenDota：', cur);
+  if (v === null) return;
+  const clean = v.trim().replace(/\/+$/, '');
+  if (clean && !/^https?:\/\//.test(clean)) return toast('地址要以 http(s):// 开头', 'err');
+  localStorage.setItem(PROXY_KEY, clean);
+  toast(clean ? '已设置中转：' + clean : '已清除中转，改为直连 OpenDota', 'ok');
 }
 
 // 先按 Steam ID、再按同名匹配已有选手
@@ -684,7 +722,8 @@ function showImportModal(parsed) {
     ${noHero ? '<p class="loss">这场比赛的英雄数据还是空的，OpenDota 可能尚未收录完整，建议几分钟后再拉取。</p>' : ''}
     ${anonCount ? `<p class="hint">有 ${anonCount} 名玩家隐藏了资料（匿名），无法自动识别，请在「对应选手」里手动选择；实在不知道是谁可选「跳过」或「新建」。</p>` : ''}
     <div>${parsed.date} · ${parsed.duration ?? '?'} 分 · <span class="side ${parsed.winner}">${parsed.winner === 'radiant' ? '天辉胜' : '夜魇胜'}</span> · 比分 ${parsed.score.join(' : ')}${exists ? ' · <span class="loss">该比赛 ID 已有记录，保存将覆盖</span>' : ''}</div>
-    <p class="hint">位置按分路 + GPM 推测，请核对。「对应选手」先按 Steam ID、再按同名自动匹配；选「新建选手」会用 Steam 昵称和 OpenDota 段位建档并绑定 ID，以后自动识别。</p>
+    <div class="hint">数据来源：${parsed.source}（${parsed.via}）${parsed.enriched?.includes('stratz') ? ' · 位置由 STRATZ 提供' : ''}</div>
+    <p class="hint">${parsed.enriched?.includes('stratz') ? '' : '位置按分路 + GPM 推测，请核对。'}「对应选手」先按 Steam ID、再按同名自动匹配；选「新建选手」会用 Steam 昵称和 OpenDota 段位建档并绑定 ID，以后自动识别。</p>
     <div class="table-wrap"><table class="tbl od-table"><thead><tr><th>阵营</th><th>Steam 昵称</th><th>英雄</th><th class="num">K/D/A</th><th>位置</th><th>对应选手</th></tr></thead><tbody>${rows('radiant')}${rows('dire')}</tbody></table></div>
     <div id="od-error" class="loss" style="margin-top:10px"></div>
     <div class="form-actions" style="margin-top:8px">
@@ -743,6 +782,7 @@ function applyImport(saveNow) {
   if (saveNow) saveMatch(); else toast((msg ? msg + '，' : '') + '已填入表单，核对后点「保存比赛」', 'ok');
 }
 $('#btn-opendota').addEventListener('click', fetchOpenDota);
+$('#btn-proxy-cfg').addEventListener('click', configProxy);
 $('#m-id').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); fetchOpenDota(); } });
 
 // ============ 导入 / 导出 / 示例 ============

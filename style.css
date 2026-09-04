@@ -209,3 +209,6 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .row-btn{display:flex;align-items:flex-end;margin-bottom:10px}
 .od-table select{width:auto;min-width:110px;padding:4px 6px;font-size:12px}
 .od-table td.wrap{max-width:220px}
+
+.row-btn{gap:6px}
+#btn-proxy-cfg{padding:7px 10px}
