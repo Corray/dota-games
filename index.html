@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dota 2 内战记录</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">⚔</span> Dota 2 内战记录</div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="players">选手名单</button>
+    <button class="tab" data-tab="record">记录比赛</button>
+    <button class="tab" data-tab="matches">比赛列表</button>
+    <button class="tab" data-tab="stats">统计</button>
+  </nav>
+  <div class="topbar-actions">
+    <button id="btn-export" class="ghost" title="把全部选手与比赛导出为 JSON 文件备份">导出备份</button>
+    <button id="btn-import" class="ghost" title="从 JSON 备份恢复（会覆盖当前数据）">导入备份</button>
+    <input type="file" id="file-import" accept="application/json,.json" hidden>
+    <button id="btn-demo" class="ghost" title="载入一组示例选手与比赛，方便试用">示例数据</button>
+  </div>
+</header>
+
+<main>
+
+<!-- ============ 选手名单 ============ -->
+<section id="tab-players" class="panel active">
+  <div class="two-col">
+    <div class="col-left">
+      <div class="card">
+        <h2 id="player-form-title">添加选手</h2>
+        <form id="player-form" autocomplete="off">
+          <label>昵称 <span class="req">*</span>
+            <input id="p-name" type="text" maxlength="24" placeholder="游戏 ID / 昵称" required>
+          </label>
+          <div class="row">
+            <label class="grow">段位
+              <select id="p-rank"></select>
+            </label>
+            <label class="narrow">星级
+              <select id="p-stars">
+                <option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option><option value="5">5</option>
+              </select>
+            </label>
+          </div>
+          <div class="field">
+            <div class="field-label">擅长位置 <span class="hint">可多选</span></div>
+            <div class="pos-checks" id="p-positions"></div>
+          </div>
+          <div class="field">
+            <div class="field-label">擅长英雄 <span class="hint">输入后回车添加，支持顿号 / 逗号批量</span></div>
+            <input id="p-hero" type="text" list="hero-list" placeholder="例如：影魔、敌法师">
+            <div id="p-hero-tags" class="tags"></div>
+          </div>
+          <div class="row">
+            <label class="grow">备注
+              <input id="p-note" type="text" maxlength="60" placeholder="可选">
+            </label>
+            <label class="grow">Steam ID <span class="hint">可选，用于 OpenDota 自动识别</span>
+              <input id="p-account" type="text" inputmode="numeric" placeholder="好友代码 / 32 位或 64 位 ID">
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="primary" id="p-submit">添加选手</button>
+            <button type="button" class="ghost hidden" id="p-cancel">取消编辑</button>
+          </div>
+        </form>
+      </div>
+
+      <details class="card">
+        <summary>批量导入选手</summary>
+        <p class="hint">每行一个选手，用逗号分隔：<code>昵称, 段位[星级], 位置, 英雄</code><br>
+          位置和英雄用 <code>/</code> 分隔，第 5 列可选 Steam ID。例：<code>小明, 传奇3, 1/2, 影魔/敌法师, 123456789</code></p>
+        <textarea id="bulk-text" rows="6" placeholder="小明, 传奇3, 1/2, 影魔/敌法师&#10;老王, 万古流芳, 4/5, 莱恩/巫医"></textarea>
+        <div class="form-actions">
+          <button type="button" class="primary" id="bulk-import">导入</button>
+        </div>
+      </details>
+    </div>
+
+    <div class="col-right">
+      <div class="card">
+        <div class="card-head">
+          <h2>名单 <span class="count" id="player-count">0</span></h2>
+          <input id="player-search" type="search" placeholder="搜索昵称 / 段位 / 英雄">
+        </div>
+        <div class="table-wrap">
+          <table class="tbl" id="player-table">
+            <thead><tr>
+              <th>昵称</th><th>段位</th><th>位置</th><th>擅长英雄</th><th class="num">场次</th><th class="num">胜率</th><th></th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="empty hidden" id="player-empty">还没有选手。左侧添加，或点右上角「示例数据」体验。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 记录比赛 ============ -->
+<section id="tab-record" class="panel">
+  <div class="card">
+    <div class="card-head">
+      <h2 id="match-form-title">新比赛</h2>
+      <div class="inline-actions">
+        <button type="button" class="ghost" id="btn-shuffle" title="把已选中的选手随机重新分成两队">随机分队</button>
+        <button type="button" class="ghost" id="btn-swap" title="天辉 / 夜魇 阵营互换">交换阵营</button>
+        <button type="button" class="ghost" id="btn-clear-teams">清空阵容</button>
+      </div>
+    </div>
+    <div class="row wrap match-meta">
+      <label class="grow">比赛 ID
+        <input id="m-id" type="text" maxlength="80" placeholder="留空自动生成；或填 Dota 2 比赛编号 / OpenDota 链接后拉取">
+      </label>
+      <div class="row-btn"><button type="button" id="btn-opendota" title="按比赛编号从 OpenDota 拉取阵容、英雄、KDA、胜负">从 OpenDota 拉取</button></div>
+      <label>日期
+        <input id="m-date" type="date">
+      </label>
+      <label class="narrow">时长(分)
+        <input id="m-duration" type="number" min="1" max="300" placeholder="可选">
+      </label>
+      <label class="grow">备注
+        <input id="m-note" type="text" maxlength="80" placeholder="可选">
+      </label>
+    </div>
+
+    <div class="teams" id="teams">
+      <div class="team radiant" data-team="radiant">
+        <div class="team-head" data-act="activate">
+          <span class="team-name">天辉 Radiant</span>
+          <span class="team-hint">点击选手加入此队</span>
+        </div>
+        <div class="slots"></div>
+      </div>
+      <div class="vs">VS</div>
+      <div class="team dire" data-team="dire">
+        <div class="team-head" data-act="activate">
+          <span class="team-name">夜魇 Dire</span>
+          <span class="team-hint">点击选手加入此队</span>
+        </div>
+        <div class="slots"></div>
+      </div>
+    </div>
+
+    <div class="pool-head">
+      <h3>选手池 <span class="hint">点击加入当前高亮的队伍，再点一次移出</span></h3>
+      <input id="pool-search" type="search" placeholder="搜索选手">
+    </div>
+    <div class="pool" id="pool"></div>
+
+    <div class="winner-row">
+      <span class="field-label">获胜方</span>
+      <button type="button" class="win-btn radiant" id="win-radiant">天辉 胜</button>
+      <button type="button" class="win-btn dire" id="win-dire">夜魇 胜</button>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="primary big" id="btn-save-match">保存比赛</button>
+      <button type="button" class="ghost hidden" id="btn-cancel-match">取消编辑</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 比赛列表 ============ -->
+<section id="tab-matches" class="panel">
+  <div class="card">
+    <div class="card-head">
+      <h2>比赛列表 <span class="count" id="match-count">0</span></h2>
+      <div class="inline-actions">
+        <select id="mf-player"><option value="">全部选手</option></select>
+        <input id="mf-q" type="search" placeholder="搜索比赛 ID / 英雄 / 备注">
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="tbl" id="match-table">
+        <thead><tr>
+          <th>比赛 ID</th><th>日期</th><th>结果</th><th>天辉</th><th>夜魇</th><th class="num">时长</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="empty hidden" id="match-empty">还没有比赛记录。</p>
+  </div>
+</section>
+
+<!-- ============ 统计 ============ -->
+<section id="tab-stats" class="panel">
+  <div class="card">
+    <div class="card-head">
+      <h2>统计</h2>
+      <div class="inline-actions wrap">
+        <label class="inline">从 <input id="sf-from" type="date"></label>
+        <label class="inline">到 <input id="sf-to" type="date"></label>
+        <label class="inline">最少场次 <input id="sf-min" type="number" min="1" value="1" style="width:4.5em"></label>
+        <button type="button" class="ghost" id="btn-copy-md" title="把选手排行复制为 Markdown 表格">复制 Markdown</button>
+        <button type="button" class="ghost" id="btn-csv" title="下载选手排行 CSV">下载 CSV</button>
+        <button type="button" class="ghost" id="btn-print">打印</button>
+      </div>
+    </div>
+    <div class="overview" id="overview"></div>
+  </div>
+
+  <div class="card">
+    <h3>选手排行 <span class="hint">点击表头排序，点击昵称看详情</span></h3>
+    <div class="table-wrap">
+      <table class="tbl sortable" id="stats-table">
+        <thead><tr>
+          <th data-key="name">选手</th>
+          <th data-key="rank">段位</th>
+          <th data-key="g" class="num">场次</th>
+          <th data-key="w" class="num">胜</th>
+          <th data-key="l" class="num">负</th>
+          <th data-key="wr" class="num">胜率</th>
+          <th data-key="rwr" class="num">天辉</th>
+          <th data-key="dwr" class="num">夜魇</th>
+          <th data-key="kda" class="num" title="(击杀+助攻)/死亡，仅统计有 KDA 数据的比赛">KDA</th>
+          <th>常用位置</th>
+          <th>常用英雄</th>
+          <th data-key="streak" class="num">连胜/负</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <h3>英雄统计</h3>
+      <div class="table-wrap">
+        <table class="tbl" id="hero-table">
+          <thead><tr><th>英雄</th><th class="num">场次</th><th class="num">胜</th><th class="num">胜率</th><th>使用者</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h3>最佳双人组合 <span class="hint">同队 ≥ 2 场</span></h3>
+      <div class="table-wrap">
+        <table class="tbl" id="duo-table">
+          <thead><tr><th>组合</th><th class="num">同队</th><th class="num">胜</th><th class="num">胜率</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<datalist id="hero-list"></datalist>
+<div id="toast"></div>
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <button class="modal-close" id="modal-close" aria-label="关闭">×</button>
+    <div id="modal-content"></div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
