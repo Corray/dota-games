@@ -24,7 +24,7 @@ const HERO_BY_ID = {
 };
 const HEROES = Object.values(HERO_BY_ID);
 const OPENDOTA = 'https://api.opendota.com/api';
-const DEFAULT_PROXY = ''; // 部署 Worker 后填入，如 https://dota-match-proxy.xxx.workers.dev
+const DEFAULT_PROXY = 'https://dota-match-proxy.corray.workers.dev'; // Cloudflare Worker 中转，源码见 worker/
 const PROXY_KEY = 'dota-proxy-url';
 const getProxy = () => (localStorage.getItem(PROXY_KEY) ?? DEFAULT_PROXY).trim().replace(/\/+$/, '');
 
