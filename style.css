@@ -282,3 +282,8 @@ tr.lg-done td{opacity:.55}
 .tn-format .inline-actions{gap:4px}
 .tn-grp{display:inline-block;white-space:nowrap;font-size:11px;font-weight:700;padding:1px 7px;border-radius:4px;background:rgba(224,168,58,.15);color:var(--accent);border:1px solid rgba(224,168,58,.4)}
 .tn-groups-preview{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px 16px;margin:8px 0 4px;font-size:13px}
+.tn-subs{background:var(--bg);border:1px dashed var(--border);border-radius:8px;padding:8px 12px;margin:8px 0}
+.tn-sub-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;font-size:13px}
+.tn-sub-row select{width:auto;min-width:120px;padding:4px 8px;font-size:13px}
+.tn-sub-row .tag button{background:none;border:0;color:var(--muted);cursor:pointer;padding:0 2px;line-height:1}
+.tn-sub-row .tag button:hover{color:var(--danger)}

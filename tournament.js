@@ -111,11 +111,19 @@ function genRoundRobin(st, teamIds = st.teamIds, group = null) {
     arr.unshift(arr.pop());
   }
 }
-// 分组循环：按种子蛇形分到各组（1→A 2→B 3→B 4→A …），每组各打单循环
+// 分组循环：优先用抽签结果（drawGroups），否则按种子蛇形分（1→A 2→B 3→B 4→A …）
+function drawValid(st, teamIds) {
+  const d = st.drawGroups; if (!Array.isArray(d) || d.length !== Math.max(2, st.groupCount || 2)) return false;
+  const flat = d.flat(); return flat.length === teamIds.length && new Set(flat).size === flat.length && flat.every(id => teamIds.includes(id));
+}
+function splitGroups(st, teamIds) {
+  if (drawValid(st, teamIds)) return st.drawGroups.map(g => [...g]);
+  const g = Math.max(2, st.groupCount || 2), groups = Array.from({ length: g }, () => []);
+  teamIds.forEach((id, i) => { const round = Math.floor(i / g), pos = i % g; groups[round % 2 ? g - 1 - pos : pos].push(id); });
+  return groups;
+}
 function genGroups(st) {
-  const g = Math.max(2, st.groupCount || 2);
-  st.groups = Array.from({ length: g }, () => []);
-  st.teamIds.forEach((id, i) => { const round = Math.floor(i / g), pos = i % g; st.groups[round % 2 ? g - 1 - pos : pos].push(id); });
+  st.groups = splitGroups(st, st.teamIds);
   st.groups.forEach((ids, gi) => genRoundRobin(st, ids, gi));
 }
 function genSwissRound(st, t) {
@@ -408,9 +416,7 @@ function previewGroups(t) {
   const st = t.stages[0];
   if (!st || st.type !== 'groups') return null;
   if (st.status !== 'pending' && st.groups) return st.groups;
-  const g = Math.max(2, st.groupCount || 2), groups = Array.from({ length: g }, () => []);
-  t.teams.forEach((tm, i) => { const round = Math.floor(i / g), pos = i % g; groups[round % 2 ? g - 1 - pos : pos].push(tm.id); });
-  return groups;
+  return splitGroups(st, t.teams.map(x => x.id));
 }
 function viewTeams(t) {
   const P = playerMap();
@@ -432,18 +438,20 @@ function viewTeams(t) {
       ? `<select data-team="${tm.id}" data-slot="${i}"><option value="">— 空位 ${i + 1} —</option>${pid && !P.has(pid) ? `<option value="${pid}" selected>(已删除)</option>` : ''}${[...(pid && P.has(pid) ? [pid] : []), ...free.map(p => p.id).filter(id => !subSet.has(id))].map(id => opt(pid, id)).join('')}</select>`
       : `<div class="tn-member">${pid ? `${esc(pname(P, pid))} ${P.get(pid) ? rankBadge(P.get(pid)) : ''}` : '<span class="hint">空位</span>'}</div>`).join('')}
   </div>`).join('');
+  const subCount = new Map(); allSubs(t).forEach(x => subCount.set(x.in, (subCount.get(x.in) || 0) + 1));
+  const cnt = pid => subCount.get(pid) ? `<span class="pc" title="替补出场局数">出场 ${subCount.get(pid)}</span>` : '';
   const subChips = editable || t.status !== 'done'
-    ? `<div class="pool">${free.length ? free.map(p => `<div class="chip ${subSet.has(p.id) ? 'in-radiant' : ''}" data-sub="${p.id}"><span>${esc(p.name)}</span>${rankBadge(p)}</div>`).join('') : '<p class="empty" style="width:100%">没有未分队的选手</p>'}</div>`
-    : `<div class="pool">${[...subSet].map(pid => `<div class="chip">${esc(pname(P, pid))}</div>`).join('') || '<span class="hint">无</span>'}</div>`;
+    ? `<div class="pool">${free.length ? free.map(p => `<div class="chip ${subSet.has(p.id) ? 'in-radiant' : ''}" data-sub="${p.id}"><span>${esc(p.name)}</span>${rankBadge(p)}${cnt(p.id)}</div>`).join('') : '<p class="empty" style="width:100%">没有未分队的选手</p>'}</div>`
+    : `<div class="pool">${[...subSet].map(pid => `<div class="chip">${esc(pname(P, pid))}${cnt(pid)}</div>`).join('') || '<span class="hint">无</span>'}</div>`;
   return `<div class="tn-toolbar">
       ${editable ? `<button type="button" id="tn-add-team">＋ 添加队伍</button>
       <button type="button" class="primary" id="tn-balance" title="按段位 / 胜率 / KDA 综合实力随机分组，各队实力尽量均衡，并尽量凑齐 1-5 号位">随机均衡分组</button>
       <button type="button" id="tn-fill" title="用未分队且不在替补池的选手，按段位蛇形填满空位">填满空位</button>
       <span class="hint">共 ${t.teams.length} 队 · 已分配 ${assigned.size} 人 · 未分配 ${free.length} 人</span>` : `<span class="hint">赛事已开始，阵容锁定；替补池仍可调整。</span>`}
     </div>
-    ${groups ? `<div class="tn-banner" style="display:block"><b>分组预览</b>（第一阶段「${esc(t.stages[0].name)}」分 ${groups.length} 组，按种子号蛇形分：1→A、2→B、3→B、4→A…）
+    ${groups ? (() => { const byDraw = drawValid(t.stages[0], t.teams.map(x => x.id)); return `<div class="tn-banner" style="display:block"><b>分组预览</b>（第一阶段「${esc(t.stages[0].name)}」分 ${groups.length} 组，${byDraw ? '随机抽签结果' : '按种子号蛇形分：1→A、2→B、3→B、4→A…'}）
       <div class="tn-groups-preview">${groups.map((g, gi) => `<div><span class="tn-grp">${GN(gi)} 组</span> ${g.length ? g.map(id => esc(tname(t, id))).join('、') : '<span class="hint">空</span>'}</div>`).join('')}</div>
-      ${editable ? '<div class="hint">想换组：用队伍卡片上的 ↑↓ 调整种子顺序；想改组数：去「赛制」页改分组数。</div>' : ''}</div>` : ''}
+      ${editable ? `<div class="inline-actions wrap" style="margin-top:8px"><button type="button" id="tn-draw" title="所有队随机打乱后平均分到各组，不看实力，可反复抽">🎲 随机抽签分组</button>${byDraw ? '<button type="button" class="ghost" id="tn-draw-reset">恢复按种子分组</button>' : ''}<span class="hint">${byDraw ? '再抽一次会覆盖当前结果；增减队伍后抽签失效，需重抽。' : '不抽签则按种子顺序分，调队伍卡片 ↑↓ 可换组；改组数去「赛制」页。'}</span></div>` : ''}</div>`; })() : ''}
     <div class="tn-teams">${teams || '<p class="empty" style="grid-column:1/-1">还没有队伍，点「添加队伍」。</p>'}</div>
     <h3 style="margin-top:16px">公共替补池 <span class="hint">点选手加入 / 移出；任何队临时缺人都可从这里补，录入比赛时把替补换进阵容即可</span></h3>
     ${subChips}`;
@@ -563,7 +571,35 @@ function viewBoard(t) {
     ${order.map((id, i) => { const tm = teamOf(t, id); return `<tr><td>${medal[i] || i + 1}</td><td><strong>${esc(tname(t, id))}</strong></td><td class="wrap">${tm ? tm.players.filter(Boolean).map(pid => esc(pname(P, pid))).join('、') : ''}</td><td>${tm ? rankText(avgRank(tm, P)) : ''}</td></tr>`; }).join('')}
     </tbody></table></div>
     <h3 style="margin-top:16px">已关联的详细记录 <span class="count">${ms.length}</span> <span class="hint">这些比赛同时计入「统计」页</span></h3>
-    ${top.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>选手</th><th class="num">局</th><th class="num">胜</th><th class="num">胜率</th></tr></thead><tbody>${top.map(([pid, o]) => `<tr><td>${esc(pname(P, pid))}</td><td class="num">${o.g}</td><td class="num">${o.w}</td><td class="num">${Math.round(o.w / o.g * 100)}%</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">还没有关联任何详细记录。在系列赛里点「录入本局」或「关联已有记录」。</p>'}`;
+    ${top.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>选手</th><th class="num">局</th><th class="num">胜</th><th class="num">胜率</th></tr></thead><tbody>${top.map(([pid, o]) => `<tr><td>${esc(pname(P, pid))}</td><td class="num">${o.g}</td><td class="num">${o.w}</td><td class="num">${Math.round(o.w / o.g * 100)}%</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">还没有关联任何详细记录。在系列赛里点「录入本局」或「关联已有记录」。</p>'}
+    ${(() => { const subs = allSubs(t); return `<h3 style="margin-top:16px">替补出场记录 <span class="count">${subs.length}</span></h3>
+      ${subs.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>阶段</th><th>轮次</th><th>对阵</th><th>局</th><th>队伍</th><th>缺席</th><th>替补</th></tr></thead><tbody>${subs.map(x => `<tr><td>${esc(x.stage)}</td><td>${esc(x.round)}</td><td>${esc(x.vs)}</td><td>第 ${x.game} 局</td><td>${esc(x.team)}</td><td>${x.out ? esc(pname(P, x.out)) : '<span class="hint">—</span>'}</td><td><b>${esc(pname(P, x.in))}</b></td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">还没有替补出场。在系列赛弹窗的「本局替补」里选缺席选手和替补，记分时会记在那一局。</p>'}`; })()}`;
+}
+
+// ============ 替补 ============
+// game.subs = [{ team:'a'|'b', out: pid, in: pid }]
+const subsText = (t, P, subs, r) => (subs || []).map(x => `${esc(tname(t, x.team === 'a' ? r.a : r.b))}：${esc(pname(P, x.out))} → ${esc(pname(P, x.in))}`).join('；');
+// 关联 / 录入详细记录时，按阵容与固定名单的差异推断替补（不在名单里的上场者 = 替补，名单里没上场的 = 缺席）
+function inferSubs(t, teamId, side, m) {
+  const tm = teamOf(t, teamId); if (!tm) return [];
+  const roster = tm.players.filter(Boolean), lineup = (m.radiant.length && m.dire.length) ? m[side].map(x => x.pid) : [];
+  const outs = roster.filter(pid => !lineup.includes(pid)), ins = lineup.filter(pid => !roster.includes(pid));
+  return ins.map((pid, i) => ({ out: outs[i] || null, in: pid }));
+}
+function gameSubsFromMatch(t, r, m, aIsRadiant) {
+  const subs = [];
+  inferSubs(t, r.a, aIsRadiant ? 'radiant' : 'dire', m).forEach(x => subs.push({ team: 'a', ...x }));
+  inferSubs(t, r.b, aIsRadiant ? 'dire' : 'radiant', m).forEach(x => subs.push({ team: 'b', ...x }));
+  return subs;
+}
+// 全赛事替补出场记录：[{ stage, round, series, game, team, out, in }]
+function allSubs(t) {
+  const out = [];
+  for (const st of t.stages) for (const s of st.series) {
+    const r = resolve(st, s); const rd = st.rounds.find(x => x.idx === s.round);
+    s.games.forEach((g, gi) => (g.subs || []).forEach(x => out.push({ stage: st.name, round: s.label || rd?.label || '', vs: `${tname(t, r.a)} vs ${tname(t, r.b)}`, game: gi + 1, team: tname(t, x.team === 'a' ? r.a : r.b), out: x.out, in: x.in, matchId: g.matchId })));
+  }
+  return out;
 }
 
 // ============ 系列赛弹窗 ============
@@ -574,9 +610,24 @@ function openSeries(sid) {
   const P = playerMap();
   const locked = st.status === 'done' || t.status === 'done' || downstreamHasGames(st, s.id) || (st.type === 'swiss' && st.rounds.length - 1 > s.round && st.series.some(x => x.round > s.round && x.games.length));
   const roster = id => { const tm = teamOf(t, id); return tm ? tm.players.filter(Boolean).map(pid => `<span class="tag">${esc(pname(P, pid))}</span>`).join(' ') : ''; };
+  // 本局替补草稿（按系列赛暂存，记分 / 录入 / 关联时写入该局）
+  if (!tui.subDraft || tui.subDraft.sid !== sid) tui.subDraft = { sid, a: [], b: [] };
+  const draft = tui.subDraft;
+  const inTeams = new Set(t.teams.flatMap(x => x.players).filter(Boolean));
+  const pool = (t.subs || []).filter(pid => !inTeams.has(pid) && P.has(pid));
+  const subPanel = side => {
+    const tm = teamOf(t, r[side]); if (!tm) return '';
+    const usedOut = new Set(draft[side].map(x => x.out)), usedIn = new Set([...draft.a, ...draft.b].map(x => x.in));
+    return `<div class="tn-sub-row"><b>${esc(tm.name)}</b>
+      <select data-sub-out="${side}"><option value="">缺席选手…</option>${tm.players.filter(Boolean).filter(pid => !usedOut.has(pid)).map(pid => `<option value="${pid}">${esc(pname(P, pid))}</option>`).join('')}</select> →
+      <select data-sub-in="${side}"><option value="">替补…</option>${pool.filter(pid => !usedIn.has(pid)).map(pid => `<option value="${pid}">${esc(pname(P, pid))}</option>`).join('')}</select>
+      <button type="button" class="mini" data-act="add-sub" data-side="${side}">添加</button>
+      ${draft[side].map((x, i) => `<span class="tag">${esc(pname(P, x.out))} → ${esc(pname(P, x.in))}<button type="button" data-act="rm-sub" data-side="${side}" data-i="${i}" title="移除">×</button></span>`).join(' ')}</div>`;
+  };
   const gameRow = (g, i) => {
     const m = g.matchId ? S().matches.find(x => x.id === g.matchId) : null;
     return `<tr><td>第 ${i + 1} 局</td><td><span class="${g.w === 'a' ? 'win' : 'loss'}">${esc(tname(t, g.w === 'a' ? r.a : r.b))} 胜</span></td>
+      <td class="wrap">${g.subs?.length ? subsText(t, P, g.subs, r) : '<span class="hint">—</span>'}</td>
       <td>${g.matchId ? (m ? `<button type="button" class="link" data-act="view-match" data-mid="${esc(m.id)}">${esc(m.id)}</button> <span class="hint">${m.date}${m.duration ? ' · ' + m.duration + '分' : ''}</span>` : `<span class="hint">记录 ${esc(g.matchId)} 已被删除</span>`) : '<span class="hint">仅比分</span>'}</td>
       <td class="num">${locked ? '' : `${!g.matchId ? `<button type="button" class="mini" data-act="link" data-gi="${i}">关联记录</button>` : `<button type="button" class="mini" data-act="unlink" data-gi="${i}">取消关联</button>`} <button type="button" class="mini danger" data-act="del-game" data-gi="${i}">删除</button>`}</td></tr>`;
   };
@@ -588,20 +639,24 @@ function openSeries(sid) {
       <div class="tn-vs-team ${r.winner === r.b ? 'won' : ''}"><div class="tn-vs-name">${esc(tname(t, r.b))}</div><div class="tn-vs-score">${r.wb}</div><div class="tn-roster">${roster(r.b)}</div></div>
     </div>
     ${r.done ? `<p class="tn-banner done" style="margin:8px 0">系列赛结束，<b>${esc(tname(t, r.winner))}</b> 胜出${locked ? '（后续场次已开始，本场已锁定）' : ''}</p>` : ''}
-    ${!locked && !r.done ? `<div class="form-actions" style="flex-wrap:wrap">
+    ${!locked && !r.done ? `<div class="tn-subs"><div><b>本局替补</b> <span class="hint">有人缺席时从公共替补池换人，会记在这一局；${pool.length ? `替补池 ${pool.length} 人可用` : '替补池为空，去「队伍与替补」添加'}</span></div>${subPanel('a')}${subPanel('b')}</div>
+    <div class="form-actions" style="flex-wrap:wrap">
       <button type="button" class="win-btn radiant" data-act="score" data-w="a">${esc(tname(t, r.a))} 胜一局</button>
       <button type="button" class="win-btn dire" data-act="score" data-w="b">${esc(tname(t, r.b))} 胜一局</button>
       <button type="button" class="primary" data-act="record">录入本局详细比赛 →</button>
       <button type="button" data-act="link" data-gi="-1">关联已有记录</button>
-    </div><p class="hint">「录入本局」会跳到记录比赛页并预填两队阵容（${esc(tname(t, r.a))} 为天辉、${esc(tname(t, r.b))} 为夜魇，可交换 / 换替补），保存后自动回填本局胜负。</p>` : ''}
-    <table class="tbl" style="margin-top:8px"><thead><tr><th>局</th><th>结果</th><th>详细记录</th><th></th></tr></thead><tbody>${s.games.map(gameRow).join('') || '<tr><td colspan="4" class="hint">还没有记录</td></tr>'}</tbody></table>
+    </div><p class="hint">「录入本局」会跳到记录比赛页并预填两队阵容（${esc(tname(t, r.a))} 为天辉、${esc(tname(t, r.b))} 为夜魇，上面选的替补会直接换进阵容），保存后自动回填本局胜负；关联已有记录时替补按实际阵容自动识别。</p>` : ''}
+    <table class="tbl" style="margin-top:8px"><thead><tr><th>局</th><th>结果</th><th>替补</th><th>详细记录</th><th></th></tr></thead><tbody>${s.games.map(gameRow).join('') || '<tr><td colspan="5" class="hint">还没有记录</td></tr>'}</tbody></table>
     <div class="form-actions" style="justify-content:flex-end">${s.tb && !locked ? '<button type="button" class="ghost danger" data-act="del-series">删除这场加赛</button>' : ''}<button type="button" class="ghost" id="tn-series-close">关闭</button></div>`);
   const box = $('#modal-content');
+  const takeSubs = () => { const subs = [...draft.a.map(x => ({ team: 'a', ...x })), ...draft.b.map(x => ({ team: 'b', ...x }))]; draft.a = []; draft.b = []; return subs; };
   $('#tn-series-close').onclick = hideModal;
   box.onclick = e => {
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const act = b.dataset.act;
-    if (act === 'score') { s.games.push({ w: b.dataset.w }); save(); afterScore(t, st); openSeries(sid); }
+    if (act === 'score') { s.games.push({ w: b.dataset.w, subs: takeSubs() }); save(); afterScore(t, st); openSeries(sid); }
+    else if (act === 'add-sub') { const side = b.dataset.side; const o = box.querySelector(`select[data-sub-out="${side}"]`).value, i = box.querySelector(`select[data-sub-in="${side}"]`).value; if (!o || !i) return toast('先选缺席选手和替补', 'err'); draft[side].push({ out: o, in: i }); openSeries(sid); }
+    else if (act === 'rm-sub') { draft[b.dataset.side].splice(Number(b.dataset.i), 1); openSeries(sid); }
     else if (act === 'del-game') { s.games.splice(Number(b.dataset.gi), 1); save(); afterScore(t, st); openSeries(sid); }
     else if (act === 'unlink') { delete s.games[Number(b.dataset.gi)].matchId; save(); openSeries(sid); }
     else if (act === 'del-series') { if (s.games.length && !confirm('这场加赛已有比分，确定删除？')) return; st.series = st.series.filter(x => x.id !== s.id); if (!st.series.some(x => x.tb)) st.rounds = st.rounds.filter(x => !x.extra); save(); hideModal(); render(); }
@@ -621,10 +676,12 @@ function startRecordGame(t, st, s, r) {
   const rd = st.rounds.find(x => x.idx === s.round);
   const base = `${t.name}-${st.name}-${(s.label || rd?.label || '').replace(/[（(].*?[）)]/g, '')}-${ta.name}vs${tb.name}-G${gi}`.replace(/\s+/g, '');
   let id = base, k = 2; while (S().matches.some(m => m.id === id)) id = `${base}-${k++}`;
+  const draft = tui.subDraft?.sid === s.id ? tui.subDraft : { a: [], b: [] };
+  const apply = (tm, subs) => tm.players.filter(Boolean).map(pid => subs.find(x => x.out === pid)?.in || pid);
   tui.pending = { tid: t.id, sid: st.id, seriesId: s.id, matchId: id, a: r.a, b: r.b };
   hideModal();
-  A.prefillMatch(ta.players.filter(Boolean), tb.players.filter(Boolean), { id, date: rd?.date || today(), note: `${seriesTitle(t, st, s)} · 第 ${gi} 局`, title: `正式比赛：${ta.name} vs ${tb.name} · 第 ${gi} 局` });
-  toast('已预填两队阵容，保存后自动回填比分', 'ok');
+  A.prefillMatch(apply(ta, draft.a), apply(tb, draft.b), { id, date: rd?.date || today(), note: `${seriesTitle(t, st, s)} · 第 ${gi} 局`, title: `正式比赛：${ta.name} vs ${tb.name} · 第 ${gi} 局` });
+  toast(draft.a.length + draft.b.length ? '已预填两队阵容（含替补），保存后自动回填比分' : '已预填两队阵容，保存后自动回填比分', 'ok');
 }
 // 关联已有记录：按双方成员重合度筛
 function openLinkPicker(t, st, s, r, gi) {
@@ -650,7 +707,9 @@ function openLinkPicker(t, st, s, r, gi) {
     const m = S().matches.find(x => x.id === b.dataset.link); if (!m) return;
     const aIsRadiant = b.dataset.air === '1';
     const w = (m.winner === 'radiant') === aIsRadiant ? 'a' : 'b';
-    if (gi >= 0) { s.games[gi].matchId = m.id; s.games[gi].w = w; } else s.games.push({ w, matchId: m.id });
+    const subs = gameSubsFromMatch(t, r, m, aIsRadiant);
+    if (gi >= 0) { s.games[gi].matchId = m.id; s.games[gi].w = w; s.games[gi].subs = subs; } else s.games.push({ w, matchId: m.id, subs });
+    if (tui.subDraft?.sid === s.id) tui.subDraft = null;
     save(); render(); openSeries(s.id);
   };
 }
@@ -684,7 +743,8 @@ A.hooks.afterSaveMatch.push(m => {
       const rad = m.radiant.filter(x => ta.has(x.pid)).length, dire = m.dire.filter(x => ta.has(x.pid)).length;
       const aIsRadiant = rad >= dire;
       const w = (m.winner === 'radiant') === aIsRadiant ? 'a' : 'b';
-      if (!s.games.some(g => g.matchId === m.id)) s.games.push({ w, matchId: m.id });
+      if (!s.games.some(g => g.matchId === m.id)) s.games.push({ w, matchId: m.id, subs: gameSubsFromMatch(t, { a: p.a, b: p.b }, m, aIsRadiant) });
+      if (tui.subDraft?.sid === s.id) tui.subDraft = null;
       save(); tui.pending = null; tui.tid = t.id; tui.view = 'detail'; tui.stageIdx = t.stages.indexOf(st); tui.sub = 'stage' + tui.stageIdx;
       switchTab('tournament'); toast(`已回填：${tname(t, w === 'a' ? p.a : p.b)} 胜`, 'ok');
       return;
@@ -736,6 +796,15 @@ root().addEventListener('click', e => {
   if (id === 'tn-delete') { if (confirm(`删除赛事「${t.name}」？已关联的比赛记录本身不会删除。`)) { S().tournaments = T().filter(x => x.id !== t.id); save(); tui.view = 'list'; render(); toast('已删除'); } return; }
   if (id === 'tn-start') { const err = validateStart(t); if (err) return toast(err, 'err'); t.status = 'running'; startStage(t, 0, t.teams.map(x => x.id)); save(); tui.sub = 'stage0'; render(); toast('赛事开始，第一阶段赛程已生成', 'ok'); return; }
   // 队伍
+  if (id === 'tn-draw') {
+    const st = t.stages[0]; if (!st || st.type !== 'groups') return;
+    const g = Math.max(2, st.groupCount || 2); const ids = t.teams.map(x => x.id);
+    if (ids.length < g * 2) return toast(`至少要 ${g * 2} 队才能分 ${g} 组`, 'err');
+    for (let i = ids.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [ids[i], ids[j]] = [ids[j], ids[i]]; }
+    st.drawGroups = Array.from({ length: g }, () => []); ids.forEach((id, i) => st.drawGroups[i % g].push(id));
+    save(); render(); toast('已随机抽签，不满意可再抽', 'ok'); return;
+  }
+  if (id === 'tn-draw-reset') { const st = t.stages[0]; if (st) delete st.drawGroups; save(); render(); toast('已恢复按种子分组'); return; }
   if (id === 'tn-add-team') { t.teams.push({ id: uid(), name: `${t.teams.length + 1} 队`, players: [null, null, null, null, null] }); save(); render(); return; }
   if (id === 'tn-balance') { if (S().players.length < 4) return toast('选手太少，先去「选手名单」添加', 'err'); openBalanceModal(t); return; }
   if (id === 'tn-fill') {
@@ -781,7 +850,7 @@ root().addEventListener('change', e => {
   if (el.matches('input[data-team][data-f=name]')) { const tm = teamOf(t, el.dataset.team); tm.name = el.value.trim() || tm.name; save(); render(); return; }
   const tr = el.closest('tr[data-stage]');
   if (tr) { const s = t.stages.find(x => x.id === tr.dataset.stage); const f = el.dataset.f; if (!s || !f) return;
-    if (f === 'thirdPlace') s.thirdPlace = el.checked; else if (f === 'name') s.name = el.value.trim() || s.name; else if (f === 'advMode') s.advMode = el.value; else if (f === 'type') { const wasDefault = Object.values(STAGE_TYPES).includes(s.name); s.type = el.value; if (wasDefault) s.name = STAGE_TYPES[s.type]; } else s[f] = Number(el.value) || 0;
+    if (f === 'thirdPlace') s.thirdPlace = el.checked; else if (f === 'name') s.name = el.value.trim() || s.name; else if (f === 'advMode') s.advMode = el.value; else if (f === 'groupCount') { s.groupCount = Number(el.value) || 2; delete s.drawGroups; } else if (f === 'type') { const wasDefault = Object.values(STAGE_TYPES).includes(s.name); s.type = el.value; if (wasDefault) s.name = STAGE_TYPES[s.type]; } else s[f] = Number(el.value) || 0;
     save(); render(); return; }
   if (el.matches('input[type=date][data-round]')) { const st = t.stages[tui.stageIdx]; const rd = st?.rounds.find(r => r.idx === Number(el.dataset.round)); if (rd) { rd.date = el.value; save(); } return; }
 });
