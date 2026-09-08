@@ -227,10 +227,12 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .tn-subnav button.on{background:var(--panel2);border-color:var(--border);color:var(--text)}
 .tn-subnav button.done:not(.on)::after{content:" ✓";color:var(--radiant)}
 .tn-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;min-height:20px}
-.tn-teams{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.tn-teams{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
 .tn-team{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
-.tn-team-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.tn-team-head input{flex:1;padding:4px 8px;font-weight:600}
+.tn-team-head{display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+.tn-team-head input{flex:1 1 110px;min-width:110px;padding:4px 8px;font-weight:600}
+.tn-team-ops{margin-left:auto}
+.tn-team-head .hint{white-space:nowrap}
 .tn-team-head strong{flex:1}
 .tn-seed{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
 .tn-team-ops{display:flex;gap:3px}
@@ -278,3 +280,5 @@ tr.lg-done td{opacity:.55}
 .tn-group h3{margin-bottom:8px}
 .series.tb{border-style:dashed}
 .tn-format .inline-actions{gap:4px}
+.tn-grp{display:inline-block;white-space:nowrap;font-size:11px;font-weight:700;padding:1px 7px;border-radius:4px;background:rgba(224,168,58,.15);color:var(--accent);border:1px solid rgba(224,168,58,.4)}
+.tn-groups-preview{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px 16px;margin:8px 0 4px;font-size:13px}

@@ -403,16 +403,27 @@ function viewDetail(t) {
 }
 
 // ---- 队伍与替补 ----
+// 首阶段为分组循环时，按当前种子顺序预演分组（与开赛时 genGroups 同一规则）
+function previewGroups(t) {
+  const st = t.stages[0];
+  if (!st || st.type !== 'groups') return null;
+  if (st.status !== 'pending' && st.groups) return st.groups;
+  const g = Math.max(2, st.groupCount || 2), groups = Array.from({ length: g }, () => []);
+  t.teams.forEach((tm, i) => { const round = Math.floor(i / g), pos = i % g; groups[round % 2 ? g - 1 - pos : pos].push(tm.id); });
+  return groups;
+}
 function viewTeams(t) {
   const P = playerMap();
   const editable = t.status === 'setup';
+  const groups = previewGroups(t);
+  const groupOf = id => { const gi = groups ? groups.findIndex(g => g.includes(id)) : -1; return gi >= 0 ? GN(gi) : ''; };
   const assigned = assignedPids(t);
   const subSet = new Set(t.subs || []);
   const free = S().players.filter(p => !assigned.has(p.id)).sort((x, y) => rankIdx(y) - rankIdx(x) || x.name.localeCompare(y.name, 'zh'));
   const opt = (cur_, pid) => `<option value="${pid}" ${cur_ === pid ? 'selected' : ''}>${esc(P.get(pid)?.name ?? '(已删除)')}（${esc(P.get(pid)?.rank || '')}${P.get(pid)?.stars || ''}）</option>`;
   const teams = t.teams.map((tm, ti) => `<div class="tn-team">
     <div class="tn-team-head">
-      <span class="tn-seed">#${ti + 1}</span>
+      <span class="tn-seed">#${ti + 1}</span>${groupOf(tm.id) ? `<span class="tn-grp">${groupOf(tm.id)} 组</span>` : ''}
       ${editable ? `<input type="text" data-team="${tm.id}" data-f="name" value="${esc(tm.name)}" maxlength="20">` : `<strong>${esc(tm.name)}</strong>`}
       <span class="hint" title="平均段位">${rankText(avgRank(tm, P))}</span>
       ${editable ? `<span class="tn-team-ops"><button type="button" class="mini" data-team="${tm.id}" data-act="up" title="种子上移">↑</button><button type="button" class="mini" data-team="${tm.id}" data-act="down" title="种子下移">↓</button><button type="button" class="mini danger" data-team="${tm.id}" data-act="del">删</button></span>` : ''}
@@ -430,6 +441,9 @@ function viewTeams(t) {
       <button type="button" id="tn-fill" title="用未分队且不在替补池的选手，按段位蛇形填满空位">填满空位</button>
       <span class="hint">共 ${t.teams.length} 队 · 已分配 ${assigned.size} 人 · 未分配 ${free.length} 人</span>` : `<span class="hint">赛事已开始，阵容锁定；替补池仍可调整。</span>`}
     </div>
+    ${groups ? `<div class="tn-banner" style="display:block"><b>分组预览</b>（第一阶段「${esc(t.stages[0].name)}」分 ${groups.length} 组，按种子号蛇形分：1→A、2→B、3→B、4→A…）
+      <div class="tn-groups-preview">${groups.map((g, gi) => `<div><span class="tn-grp">${GN(gi)} 组</span> ${g.length ? g.map(id => esc(tname(t, id))).join('、') : '<span class="hint">空</span>'}</div>`).join('')}</div>
+      ${editable ? '<div class="hint">想换组：用队伍卡片上的 ↑↓ 调整种子顺序；想改组数：去「赛制」页改分组数。</div>' : ''}</div>` : ''}
     <div class="tn-teams">${teams || '<p class="empty" style="grid-column:1/-1">还没有队伍，点「添加队伍」。</p>'}</div>
     <h3 style="margin-top:16px">公共替补池 <span class="hint">点选手加入 / 移出；任何队临时缺人都可从这里补，录入比赛时把替补换进阵容即可</span></h3>
     ${subChips}`;
