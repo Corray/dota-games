@@ -835,7 +835,7 @@ function openLeagueImport() {
   const last = localStorage.getItem(LEAGUE_KEY) || '';
   showModal(`<h2>按联赛导入比赛</h2>
     <p class="hint">输入 Dota 2 联赛 ID（内战房间绑定的 league_id），拉取该联赛全部比赛，再逐场导入到比赛列表。已导入的自动跳过；选手按 Steam ID 匹配已有名单，匹配不到的可自动新建。</p>
-    <div class="inline-actions"><input type="text" id="lg-id" placeholder="联赛 ID，如 19638" value="${esc(last)}" style="width:200px"><button type="button" class="primary" id="lg-fetch">拉取比赛列表</button></div>
+    <div class="inline-actions"><input type="text" id="lg-id" placeholder="联赛 ID" value="${esc(last)}" style="width:200px"><button type="button" class="primary" id="lg-fetch">拉取比赛列表</button></div>
     <div id="lg-body" style="margin-top:12px"></div>`);
   $('#lg-fetch').onclick = fetchLeagueList;
   $('#lg-id').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); fetchLeagueList(); } };
