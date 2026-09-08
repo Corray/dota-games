@@ -274,3 +274,7 @@ tr.adv td{background:var(--radiant-dim)}
 .lg-wrap{max-height:52vh;overflow:auto}
 .lg-wrap thead th{position:sticky;top:0;z-index:1}
 tr.lg-done td{opacity:.55}
+.tn-group{margin-top:14px;padding-top:10px;border-top:1px dashed var(--border)}
+.tn-group h3{margin-bottom:8px}
+.series.tb{border-style:dashed}
+.tn-format .inline-actions{gap:4px}
