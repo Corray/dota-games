@@ -14,6 +14,7 @@
     <button class="tab" data-tab="record">记录比赛</button>
     <button class="tab" data-tab="matches">比赛列表</button>
     <button class="tab" data-tab="stats">统计</button>
+    <button class="tab" data-tab="tournament">正式比赛</button>
   </nav>
   <div class="topbar-actions">
     <button id="btn-export" class="ghost" title="把全部选手与比赛导出为 JSON 文件备份">导出备份</button>
@@ -171,6 +172,7 @@
       <div class="inline-actions">
         <select id="mf-player"><option value="">全部选手</option></select>
         <input id="mf-q" type="search" placeholder="搜索比赛 ID / 英雄 / 备注">
+        <button type="button" id="btn-league" title="输入联赛 ID，拉取该联赛全部比赛并批量导入（经中转）">联赛导入</button>
       </div>
     </div>
     <div class="table-wrap">
@@ -247,6 +249,11 @@
   </div>
 </section>
 
+<!-- ============ 正式比赛（赛事） ============ -->
+<section id="tab-tournament" class="panel">
+  <div id="tournament-root"></div>
+</section>
+
 </main>
 
 <datalist id="hero-list"></datalist>
@@ -258,5 +265,6 @@
   </div>
 </div>
 <script src="app.js"></script>
+<script src="tournament.js"></script>
 </body>
 </html>

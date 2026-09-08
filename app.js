@@ -73,9 +73,9 @@ function toast(msg, type = '') {
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) { const d = JSON.parse(raw); return { players: d.players || [], matches: d.matches || [] }; }
+    if (raw) { const d = JSON.parse(raw); return { players: d.players || [], matches: d.matches || [], tournaments: d.tournaments || [] }; }
   } catch (e) { console.warn('读取本地数据失败', e); }
-  return { players: [], matches: [] };
+  return { players: [], matches: [], tournaments: [] };
 }
 function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 
@@ -131,7 +131,10 @@ function renderAll() {
   else if (ui.tab === 'record') renderTeams();
   else if (ui.tab === 'matches') renderMatches();
   else if (ui.tab === 'stats') renderStats();
+  else hooks.renderTab[ui.tab]?.();
 }
+// 扩展模块（tournament.js）通过 hooks 接入：按 tab 渲染、保存比赛后回调
+const hooks = { renderTab: {}, afterSaveMatch: [] };
 
 // ============ 选手名单 ============
 (function initPlayerForm() {
@@ -387,6 +390,18 @@ function saveMatch() {
     state.matches[i] = match; toast('已更新比赛 ' + id, 'ok');
   } else { state.matches.push(match); toast('已保存比赛 ' + id, 'ok'); }
   save(); resetMatchForm();
+  hooks.afterSaveMatch.forEach(fn => { try { fn(match); } catch (e) { console.error(e); } });
+}
+// 供赛事模块预填两队阵容后跳到记录页
+function prefillMatch(radiantPids, direPids, meta = {}) {
+  resetMatchForm();
+  const fill = (team, pids) => pids.slice(0, 5).forEach((pid, i) => { ui.draft[team][i] = { pid, pos: 0, hero: '' }; ui.draft[team][i].pos = defaultPos(team, pid); });
+  fill('radiant', radiantPids); fill('dire', direPids);
+  if (meta.id) $('#m-id').value = meta.id;
+  if (meta.date) $('#m-date').value = meta.date;
+  if (meta.note) $('#m-note').value = meta.note;
+  $('#match-form-title').textContent = meta.title || '新比赛';
+  switchTab('record'); window.scrollTo({ top: 0 });
 }
 function resetMatchForm() {
   ui.editingMatch = null; ui.draft = newDraft(); ui.activeTeam = 'radiant';
@@ -661,37 +676,43 @@ async function fetchPwesports(id, fetchT) {
   };
 }
 
+// 单场比赛原始数据：完美世界直连 → Worker 中转 → OpenDota 直连。返回 { m, errs, proxy }
+async function fetchMatchRaw(id) {
+  const fetchT = (url, ms) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t)); };
+  const errs = [];
+  let m = null;
+  const proxy = getProxy();
+  try { m = await fetchPwesports(id, fetchT); }
+  catch (e) { errs.push('完美世界：' + (e.name === 'AbortError' ? '超时' : e.message)); }
+  if (!m && proxy) {
+    try {
+      const res = await fetchT(`${proxy}/match/${id}`, 30000);
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) m = body;
+      else if (res.status === 404) throw Object.assign(new Error(body.error || '没有这场比赛'), { fatal: true });
+      else throw new Error(body.error ? `${body.error}（${(body.errors || []).join('；')}）` : '中转返回 ' + res.status);
+    } catch (e) { if (e.fatal) throw e; errs.push('中转：' + (e.name === 'AbortError' ? '超时' : e.message)); }
+  }
+  if (!m) {
+    try {
+      const res = await fetchT(`${OPENDOTA}/matches/${id}`, 15000);
+      if (res.status === 404) throw new Error('OpenDota 上没有这场比赛');
+      if (res.status === 429) throw new Error('请求太频繁');
+      if (!res.ok) throw new Error('返回 ' + res.status);
+      m = await res.json(); m.source = m.source || 'opendota';
+    } catch (e) { errs.push('OpenDota 直连：' + (e.name === 'AbortError' ? '超时' : e.message)); }
+  }
+  if (!m) throw new Error(errs.join('；'));
+  if (!Array.isArray(m.players) || m.players.length < 2) throw new Error('比赛数据不完整，可能还没同步');
+  return { m, errs, proxy };
+}
+
 async function fetchOpenDota() {
   const id = extractMatchId($('#m-id').value);
   if (!id) return toast('请先在「比赛 ID」填入 Dota 2 比赛编号或链接', 'err');
   const btn = $('#btn-opendota'); btn.disabled = true; btn.textContent = '查询中…';
-  const fetchT = (url, ms) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t)); };
-  const errs = [];
   try {
-    let m = null;
-    const proxy = getProxy();
-    try { m = await fetchPwesports(id, fetchT); }
-    catch (e) { errs.push('完美世界：' + (e.name === 'AbortError' ? '超时' : e.message)); }
-    if (!m && proxy) {
-      try {
-        const res = await fetchT(`${proxy}/match/${id}`, 30000);
-        const body = await res.json().catch(() => ({}));
-        if (res.ok) m = body;
-        else if (res.status === 404) throw Object.assign(new Error(body.error || '没有这场比赛'), { fatal: true });
-        else throw new Error(body.error ? `${body.error}（${(body.errors || []).join('；')}）` : '中转返回 ' + res.status);
-      } catch (e) { if (e.fatal) throw e; errs.push('中转：' + (e.name === 'AbortError' ? '超时' : e.message)); }
-    }
-    if (!m) {
-      try {
-        const res = await fetchT(`${OPENDOTA}/matches/${id}`, 15000);
-        if (res.status === 404) throw new Error('OpenDota 上没有这场比赛');
-        if (res.status === 429) throw new Error('请求太频繁');
-        if (!res.ok) throw new Error('返回 ' + res.status);
-        m = await res.json(); m.source = m.source || 'opendota';
-      } catch (e) { errs.push('OpenDota 直连：' + (e.name === 'AbortError' ? '超时' : e.message)); }
-    }
-    if (!m) throw new Error(errs.join('；'));
-    if (!Array.isArray(m.players) || m.players.length < 2) throw new Error('比赛数据不完整，可能还没同步');
+    const { m, errs, proxy } = await fetchMatchRaw(id);
     const parsed = parseOpenDotaMatch(m);
     parsed.source = { pwesports: '完美世界电竞', steam: 'Valve 官方接口' }[m.source] || 'OpenDota';
     parsed.via = m.source === 'pwesports' ? '直连' : (proxy && !errs.some(e => e.startsWith('中转')) ? '中转' : '直连');
@@ -806,6 +827,110 @@ function applyImport(saveNow) {
   const msg = [created ? `新建 ${created} 名选手` : '', bound ? `绑定 ${bound} 个 Steam ID` : '', skipped ? `跳过 ${skipped} 人` : ''].filter(Boolean).join('，');
   if (saveNow) saveMatch(); else toast((msg ? msg + '，' : '') + '已填入表单，核对后点「保存比赛」', 'ok');
 }
+// ============ 联赛导入（Steam GetMatchHistory，经 Worker 中转翻页） ============
+const LEAGUE_KEY = 'dota-league-id';
+let leagueStop = false;
+function openLeagueImport() {
+  if (!getProxy()) return toast('联赛列表要经过中转（Steam 接口不允许浏览器直连），请先点 ⚙ 设置中转地址', 'err');
+  const last = localStorage.getItem(LEAGUE_KEY) || '';
+  showModal(`<h2>按联赛导入比赛</h2>
+    <p class="hint">输入 Dota 2 联赛 ID（内战房间绑定的 league_id），拉取该联赛全部比赛，再逐场导入到比赛列表。已导入的自动跳过；选手按 Steam ID 匹配已有名单，匹配不到的可自动新建。</p>
+    <div class="inline-actions"><input type="text" id="lg-id" placeholder="联赛 ID，如 19638" value="${esc(last)}" style="width:200px"><button type="button" class="primary" id="lg-fetch">拉取比赛列表</button></div>
+    <div id="lg-body" style="margin-top:12px"></div>`);
+  $('#lg-fetch').onclick = fetchLeagueList;
+  $('#lg-id').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); fetchLeagueList(); } };
+  if (last) fetchLeagueList();
+}
+async function fetchLeagueList() {
+  const id = ($('#lg-id').value.match(/\d+/) || [])[0];
+  if (!id) return toast('请输入联赛 ID', 'err');
+  localStorage.setItem(LEAGUE_KEY, id);
+  const body = $('#lg-body'); body.innerHTML = '<p class="hint">拉取中，联赛比赛多时要几秒…</p>';
+  const btn = $('#lg-fetch'); btn.disabled = true;
+  try {
+    const c = new AbortController(); const timer = setTimeout(() => c.abort(), 60000);
+    const res = await fetch(`${getProxy()}/league/${id}`, { signal: c.signal }).finally(() => clearTimeout(timer));
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || ('中转返回 ' + res.status));
+    renderLeagueList(id, d.matches || [], d.total);
+  } catch (e) { body.innerHTML = `<p class="loss">拉取失败：${esc(e.name === 'AbortError' ? '超时' : e.message)}</p>`; }
+  finally { btn.disabled = false; }
+}
+function renderLeagueList(leagueId, list, total) {
+  const byAcc = new Map(state.players.filter(p => p.accountId).map(p => [p.accountId, p]));
+  const have = new Set(state.matches.map(m => m.id));
+  const fmt = ts => { const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  const rows = list.map(m => {
+    const done = have.has(String(m.match_id));
+    const known = (m.players || []).filter(p => byAcc.has(p.account_id)).map(p => byAcc.get(p.account_id).name);
+    return `<tr class="${done ? 'lg-done' : ''}"><td><input type="checkbox" data-mid="${m.match_id}" ${done ? '' : 'checked'}></td><td>${m.match_id}</td><td>${fmt(m.start_time)}</td>
+      <td class="wrap lineup">${known.map(esc).join(' ') || '<span class="hint">无已知选手</span>'}${known.length < (m.players || []).length ? ` <span class="hint">+${(m.players || []).length - known.length} 未知</span>` : ''}</td>
+      <td class="lg-status">${done ? '<span class="win">已导入</span>' : '<span class="hint">未导入</span>'}</td></tr>`;
+  });
+  const pending = list.filter(m => !have.has(String(m.match_id))).length;
+  $('#lg-body').innerHTML = `<div class="inline-actions wrap"><span>共 ${list.length} 场${total && total !== list.length ? `（Steam 报告 ${total} 场）` : ''}，未导入 <b>${pending}</b> 场</span>
+      <button type="button" class="primary" id="lg-import">导入选中</button><button type="button" class="ghost" id="lg-all">全选未导入</button><button type="button" class="ghost" id="lg-none">全不选</button>
+      <label class="inline hint"><input type="checkbox" id="lg-newp" checked> 自动新建未知选手</label></div>
+    <div id="lg-progress" class="hint" style="margin:8px 0"></div>
+    <div class="table-wrap lg-wrap"><table class="tbl"><thead><tr><th></th><th>比赛 ID</th><th>开始时间</th><th>已知选手</th><th>状态</th></tr></thead><tbody>${rows.join('') || '<tr><td colspan="5" class="empty">这个联赛没有比赛</td></tr>'}</tbody></table></div>`;
+  $('#lg-all').onclick = () => $$('#lg-body input[data-mid]').forEach(c => { c.checked = !c.closest('tr').classList.contains('lg-done'); });
+  $('#lg-none').onclick = () => $$('#lg-body input[data-mid]').forEach(c => { c.checked = false; });
+  $('#lg-import').onclick = () => importLeagueMatches(leagueId);
+}
+async function importLeagueMatches(leagueId) {
+  const ids = $$('#lg-body input[data-mid]:checked').map(c => c.dataset.mid);
+  if (!ids.length) return toast('没有选中的比赛', 'err');
+  const autoNew = $('#lg-newp').checked;
+  const btn = $('#lg-import'); btn.disabled = true; btn.textContent = '导入中…'; leagueStop = false;
+  const stopBtn = document.createElement('button'); stopBtn.type = 'button'; stopBtn.textContent = '停止'; stopBtn.onclick = () => { leagueStop = true; stopBtn.disabled = true; }; btn.after(stopBtn);
+  const prog = $('#lg-progress');
+  let ok = 0, fail = 0, created = 0; const errs = [];
+  for (let i = 0; i < ids.length; i++) {
+    if (leagueStop) break;
+    const id = ids[i];
+    prog.textContent = `进度 ${i + 1} / ${ids.length} · 正在拉取 ${id}…（成功 ${ok}，失败 ${fail}）`;
+    const tr = $(`#lg-body input[data-mid="${id}"]`)?.closest('tr');
+    try {
+      const { m } = await fetchMatchRaw(id);
+      const r = importParsedMatch(parseOpenDotaMatch(m), { leagueId, autoNew });
+      created += r.created; ok++;
+      if (tr) { tr.classList.add('lg-done'); tr.querySelector('.lg-status').innerHTML = '<span class="win">已导入</span>'; tr.querySelector('input').checked = false; }
+      if (ok % 10 === 0) save();
+    } catch (e) {
+      fail++; errs.push(`${id}：${e.message}`);
+      if (tr) tr.querySelector('.lg-status').innerHTML = `<span class="loss" title="${esc(e.message)}">失败</span>`;
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  save(); renderAll();
+  prog.innerHTML = `${leagueStop ? '已停止。' : '完成。'}成功 <b>${ok}</b> 场，失败 ${fail} 场，新建选手 ${created} 名。${errs.length ? `<details><summary>失败明细</summary>${errs.map(esc).join('<br>')}</details>` : ''}`;
+  btn.disabled = false; btn.textContent = '导入选中'; stopBtn.remove();
+  if (ok) toast(`已导入 ${ok} 场比赛`, 'ok');
+}
+// 把解析后的比赛写入 state：按 Steam ID 匹配选手，缺的按需新建；两队都至少要有一名可识别选手
+function importParsedMatch(parsed, { leagueId, autoNew }) {
+  let created = 0;
+  const side = rows => rows.map(r => {
+    let p = r.accountId ? state.players.find(x => x.accountId === r.accountId) : null;
+    if (!p && !r.hidden && !r.anon) { const n = r.name.toLowerCase(); p = state.players.find(x => !x.accountId && x.name.toLowerCase() === n); if (p && r.accountId) p.accountId = r.accountId; }
+    if (!p) {
+      if (!autoNew) return null;
+      const rk = rankFromTier(r.rankTier);
+      let name = r.name, k = 2; while (state.players.some(x => x.name === name)) name = `${r.name}(${k++})`;
+      p = { id: uid(), createdAt: Date.now(), name, rank: rk ? rk.rank : '传奇', stars: rk ? rk.stars : 3, positions: [r.pos], heroes: r.hero ? [r.hero] : [], note: (r.anon || r.hidden) ? '联赛导入，昵称未公开，请改成真实昵称' : '联赛导入', accountId: r.accountId };
+      state.players.push(p); created++;
+    }
+    const o = { pid: p.id, pos: r.pos, hero: r.hero }; if (r.kda) o.kda = r.kda; return o;
+  }).filter(Boolean);
+  const radiant = side(parsed.radiant), dire = side(parsed.dire);
+  if (!radiant.length || !dire.length) throw new Error('两队都没有可识别的选手（未勾选自动新建）');
+  const match = { id: parsed.id, date: parsed.date, duration: parsed.duration, note: `联赛 ${leagueId} 导入 · 比分 ${parsed.score.join(':')}`, radiant, dire, winner: parsed.winner, createdAt: Date.now(), leagueId: Number(leagueId) };
+  const i = state.matches.findIndex(m => m.id === match.id);
+  if (i >= 0) state.matches[i] = { ...match, createdAt: state.matches[i].createdAt }; else state.matches.push(match);
+  return { created };
+}
+$('#btn-league').addEventListener('click', openLeagueImport);
+
 $('#btn-opendota').addEventListener('click', fetchOpenDota);
 $('#btn-proxy-cfg').addEventListener('click', configProxy);
 $('#m-id').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); fetchOpenDota(); } });
@@ -823,8 +948,8 @@ $('#file-import').addEventListener('change', async e => {
   try {
     const d = JSON.parse(await f.text());
     if (!Array.isArray(d.players) || !Array.isArray(d.matches)) throw new Error('格式不对');
-    if (!confirm(`导入 ${d.players.length} 名选手、${d.matches.length} 场比赛，将覆盖当前数据（${state.players.length} 人 / ${state.matches.length} 场）。继续？`)) return;
-    state = { players: d.players, matches: d.matches }; save(); resetPlayerForm(); resetMatchForm(); renderAll(); toast('导入成功', 'ok');
+    if (!confirm(`导入 ${d.players.length} 名选手、${d.matches.length} 场比赛、${(d.tournaments || []).length} 个赛事，将覆盖当前数据（${state.players.length} 人 / ${state.matches.length} 场 / ${(state.tournaments || []).length} 个赛事）。继续？`)) return;
+    state = { players: d.players, matches: d.matches, tournaments: Array.isArray(d.tournaments) ? d.tournaments : [] }; save(); resetPlayerForm(); resetMatchForm(); renderAll(); toast('导入成功', 'ok');
   } catch (err) { toast('导入失败：' + err.message, 'err'); }
   e.target.value = '';
 });
@@ -858,8 +983,15 @@ function demoData() {
     const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     matches.push({ id: `${date.replace(/-/g, '')}-${String(matches.filter(m => m.date === date).length + 1).padStart(2, '0')}`, date, duration: 28 + Math.floor(rnd() * 30), note: i === 3 ? '加时大逆转' : '', radiant: mk(idx.slice(0, 5)), dire: mk(idx.slice(5)), winner: rnd() < 0.52 ? 'radiant' : 'dire', createdAt: d.getTime() });
   }
-  return { players, matches };
+  return { players, matches, tournaments: [] };
 }
+
+// ============ 对扩展模块暴露的接口 ============
+window.DotaApp = {
+  get state() { return state; }, get ui() { return ui; },
+  save, hooks, renderAll, switchTab, prefillMatch, startEditMatch, computeStats,
+  $, $$, esc, uid, today, toast, showModal, hideModal, playerMap, pname, rankBadge, rankIdx, RANKS, POS_SHORT,
+};
 
 // ============ 启动 ============
 renderAll();

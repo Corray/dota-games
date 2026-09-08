@@ -1,12 +1,14 @@
 /**
  * Dota 2 比赛详情中转（Cloudflare Worker）
  *   GET /match/{比赛ID}        → 统一格式的比赛详情（OpenDota 优先，失败走 Valve 官方 Steam Web API，可选 STRATZ 补位置/昵称）
+ *   GET /league/{联赛ID}       → 该联赛全部比赛列表（Steam GetMatchHistory 服务端翻页，需 STEAM_API_KEY）
  *   GET /                       → 健康检查 + 已配置的数据源
  *   ?nocache=1                  → 跳过 10 分钟缓存
  */
 const OPENDOTA = 'https://api.opendota.com/api/matches/';
 const STEAM_MATCH = 'https://api.steampowered.com/IDOTA2Match_570/GetMatchDetails/v1/';
 const STEAM_SUMMARY = 'https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/';
+const STEAM_HISTORY = 'https://api.steampowered.com/IDOTA2Match_570/GetMatchHistory/v1/';
 const STRATZ = 'https://api.stratz.com/graphql';
 const ANON = 4294967295;             // Steam 对匿名玩家返回的占位 account_id
 const STEAM64_BASE = 76561197960265728n;
@@ -104,16 +106,62 @@ async function enrichStratz(data, id, token) {
   data.enriched = [...(data.enriched || []), 'stratz'];
 }
 
+// ---------- 联赛比赛列表：按 start_at_match_id 向前翻页直到 results_remaining 为 0 ----------
+async function leagueMatches(leagueId, key) {
+  const out = [], seen = new Set();
+  let start = null, total = null;
+  for (let page = 0; page < 20; page++) {
+    const u = `${STEAM_HISTORY}?key=${encodeURIComponent(key)}&league_id=${leagueId}&matches_requested=100${start ? '&start_at_match_id=' + start : ''}`;
+    const r = await fetchTimeout(u, {}, 9000);
+    if (r.status === 403 || r.status === 401) throw new Error('Steam API Key 无效或未授权');
+    if (r.status === 429) throw new Error('Steam 限流，稍后再试');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const res = (await r.json())?.result;
+    if (!res || res.status !== 1) throw new Error(res?.statusDetail || '空响应');
+    if (total == null) total = res.total_results ?? null;
+    const list = res.matches || [];
+    let fresh = 0;
+    for (const m of list) {
+      if (seen.has(m.match_id)) continue;
+      seen.add(m.match_id); fresh++;
+      out.push({
+        match_id: m.match_id, start_time: m.start_time, lobby_type: m.lobby_type, series_id: m.series_id || 0, series_type: m.series_type || 0,
+        players: (m.players || []).map(p => ({ account_id: p.account_id == null || p.account_id === ANON ? null : p.account_id, player_slot: p.player_slot, hero_id: p.hero_id || 0 })),
+      });
+    }
+    if (!list.length || !fresh || !res.results_remaining) break;
+    start = list[list.length - 1].match_id - 1;
+  }
+  return { league_id: Number(leagueId), total: total ?? out.length, count: out.length, matches: out };
+}
+
 export default {
   async fetch(req, env, ctx) {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     if (req.method !== 'GET') return json({ error: '只支持 GET' }, 405);
     const url = new URL(req.url);
     if (url.pathname === '/' || url.pathname === '') {
-      return json({ ok: true, usage: '/match/{比赛ID}', sources: { opendota: true, steam: !!env.STEAM_API_KEY, stratz: !!env.STRATZ_TOKEN } });
+      return json({ ok: true, usage: ['/match/{比赛ID}', '/league/{联赛ID}'], sources: { opendota: true, steam: !!env.STEAM_API_KEY, stratz: !!env.STRATZ_TOKEN } });
+    }
+    const lg = url.pathname.match(/^\/league\/(\d{1,9})\/?$/);
+    if (lg) {
+      if (!env.STEAM_API_KEY) return json({ error: '中转未配置 STEAM_API_KEY，无法拉取联赛列表' }, 503);
+      const cache = caches.default;
+      const cacheKey = new Request(`${url.origin}/league/${lg[1]}`, { method: 'GET' });
+      if (!url.searchParams.has('nocache')) {
+        const hit = await cache.match(cacheKey);
+        if (hit) { const h = new Headers(hit.headers); h.set('X-Cache', 'HIT'); return new Response(hit.body, { status: hit.status, headers: h }); }
+      }
+      try {
+        const data = await leagueMatches(lg[1], env.STEAM_API_KEY);
+        data.fetchedAt = new Date().toISOString();
+        const res = json(data, 200, { 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' });
+        ctx.waitUntil(cache.put(cacheKey, res.clone()));
+        return res;
+      } catch (e) { return json({ error: '拉取联赛列表失败：' + e.message, league_id: Number(lg[1]) }, 502); }
     }
     const m = url.pathname.match(/^\/match\/(\d{5,})\/?$/);
-    if (!m) return json({ error: '用法：/match/{比赛ID}' }, 404);
+    if (!m) return json({ error: '用法：/match/{比赛ID} 或 /league/{联赛ID}' }, 404);
     const id = m[1];
 
     const cache = caches.default;

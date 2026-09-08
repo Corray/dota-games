@@ -212,3 +212,65 @@ button:disabled{opacity:.5;cursor:not-allowed}
 
 .row-btn{gap:6px}
 #btn-proxy-cfg{padding:7px 10px}
+
+/* ---- 正式比赛（赛事） ---- */
+.tn-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.tn-card{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;cursor:pointer}
+.tn-card:hover{border-color:var(--accent)}
+.tn-card-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px;font-size:15px}
+.tn-champ{margin-top:6px;color:var(--accent);font-weight:600}
+.chip-s{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;border:1px solid var(--border);color:var(--muted);font-weight:500;vertical-align:middle}
+.chip-s.running{color:var(--radiant);border-color:var(--radiant)}
+.chip-s.done{color:var(--accent);border-color:var(--accent)}
+.tn-subnav{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:14px;padding-bottom:8px}
+.tn-subnav button{background:transparent;border-color:transparent;color:var(--muted);padding:5px 12px}
+.tn-subnav button.on{background:var(--panel2);border-color:var(--border);color:var(--text)}
+.tn-subnav button.done:not(.on)::after{content:" ✓";color:var(--radiant)}
+.tn-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;min-height:20px}
+.tn-teams{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.tn-team{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.tn-team-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.tn-team-head input{flex:1;padding:4px 8px;font-weight:600}
+.tn-team-head strong{flex:1}
+.tn-seed{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.tn-team-ops{display:flex;gap:3px}
+.tn-team select{width:100%;margin-bottom:5px;padding:4px 8px;font-size:13px}
+.tn-member{display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-bottom:1px solid var(--border);font-size:13px}
+.tn-member:last-child{border-bottom:0}
+.tn-format input[type=text],.tn-format select{width:auto;padding:4px 8px;font-size:13px}
+.tn-banner{background:rgba(224,168,58,.1);border:1px solid var(--accent);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.tn-banner.done{background:var(--radiant-dim);border-color:var(--radiant)}
+.tn-stage-grid{display:grid;grid-template-columns:1fr 360px;gap:16px;align-items:start}
+.tn-round{margin-bottom:14px}
+.tn-round-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.tn-round-head input[type=date]{width:auto;padding:3px 6px;font-size:12px}
+.tn-series-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+.series{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-size:13px;position:relative}
+.series.clickable{cursor:pointer}
+.series.clickable:hover{border-color:var(--accent)}
+.series.live{border-color:var(--accent)}
+.series.done{border-color:#3a4552}
+.series.wait{opacity:.6}
+.series .t{display:flex;justify-content:space-between;align-items:center;padding:3px 4px;border-radius:4px}
+.series .t.win{background:var(--radiant-dim);color:var(--radiant);font-weight:700}
+.series .t.tbd .tn-name{color:var(--muted);font-style:italic}
+.series .sc{font-variant-numeric:tabular-nums;font-weight:700;min-width:1.2em;text-align:right}
+.series-label{font-size:11px;color:var(--accent);margin-bottom:2px}
+.series-foot{font-size:11px;color:var(--muted);margin-top:3px;text-align:right}
+.bracket{display:flex;gap:18px;overflow-x:auto;padding-bottom:8px}
+.b-round{display:flex;flex-direction:column;justify-content:space-around;gap:10px;min-width:220px;flex:0 0 220px}
+.b-round .tn-round-head{flex-direction:column;align-items:flex-start;gap:4px}
+.b-round .series{margin:0}
+tr.adv td{background:var(--radiant-dim)}
+.tn-vs{display:grid;grid-template-columns:1fr 40px 1fr;gap:10px;align-items:center;margin:10px 0}
+.tn-vs-team{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center}
+.tn-vs-team.won{border-color:var(--radiant)}
+.tn-vs-name{font-weight:700;font-size:16px}
+.tn-vs-score{font-size:34px;font-weight:800;color:var(--accent);line-height:1.2}
+.tn-roster{display:flex;gap:4px;flex-wrap:wrap;justify-content:center;margin-top:6px}
+@media (max-width:900px){.tn-stage-grid{grid-template-columns:1fr}.tn-vs{grid-template-columns:1fr}.tn-vs .vs{display:none}}
+
+/* ---- 联赛导入 ---- */
+.lg-wrap{max-height:52vh;overflow:auto}
+.lg-wrap thead th{position:sticky;top:0;z-index:1}
+tr.lg-done td{opacity:.55}
