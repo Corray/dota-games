@@ -24,6 +24,7 @@ const HERO_BY_ID = {
 };
 const HEROES = Object.values(HERO_BY_ID);
 const OPENDOTA = 'https://api.opendota.com/api';
+const PWESPORTS = 'https://gwapi.pwesports.cn/appdatacenter/api/v1/dota2/matches'; // 完美世界电竞数据中心，国服数据、中文昵称，浏览器可直连
 const DEFAULT_PROXY = 'https://dota-match-proxy.corray.workers.dev'; // Cloudflare Worker 中转，源码见 worker/
 const PROXY_KEY = 'dota-proxy-url';
 const getProxy = () => (localStorage.getItem(PROXY_KEY) ?? DEFAULT_PROXY).trim().replace(/\/+$/, '');
@@ -623,11 +624,12 @@ function parseOpenDotaMatch(m) {
   const d = new Date((m.start_time || Date.now() / 1000) * 1000);
   const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const mk = p => {
-    const hero = HERO_BY_ID[p.hero_id] || (p.hero_id ? `英雄#${p.hero_id}` : '');
+    const hero = HERO_BY_ID[p.hero_id] || p.hero_name_zh || (p.hero_id ? `英雄#${p.hero_id}` : '');
     const side = (typeof p.isRadiant === 'boolean' ? p.isRadiant : p.player_slot < 128) ? '天辉' : '夜魇';
     return {
     accountId: p.account_id || null, anon: !p.account_id,
     name: (p.personaname || '').trim() || (p.account_id ? `玩家${p.account_id}` : `匿名·${side}·${hero || (p.player_slot % 128) + 1}`),
+    hidden: !!p.hidden_name,
     heroId: p.hero_id, hero,
     kda: [p.kills || 0, p.deaths || 0, p.assists || 0], gpm: p.gold_per_min || 0,
     laneRole: p.lane_role || 0, isRoaming: !!p.is_roaming, rankTier: p.rank_tier || 0, pos: 0, position: p.position || 0,
@@ -640,16 +642,37 @@ function parseOpenDotaMatch(m) {
   };
 }
 
+// 完美世界电竞接口 → 转成 OpenDota 形状，复用 parseOpenDotaMatch。昵称为「匿名」说明玩家隐藏了资料，但 account_id 仍在，可按 Steam ID 匹配
+async function fetchPwesports(id, fetchT) {
+  const res = await fetchT(`${PWESPORTS}?matchId=${id}&platform=admin`, 15000);
+  if (!res.ok) throw new Error('返回 ' + res.status);
+  const body = await res.json();
+  if (body.code !== 0) throw new Error(body.message || '返回 code ' + body.code);
+  const m = body.result?.find?.(g => g.group === 'match')?.data;
+  if (!m) throw Object.assign(new Error('尚未收录这场比赛（刚结束的比赛通常要等几分钟）'), { notFound: true });
+  return {
+    match_id: m.match_id, start_time: m.start_time, duration: m.duration, radiant_win: !!m.radiant_win,
+    radiant_score: m.radiant_score, dire_score: m.dire_score, source: 'pwesports',
+    players: (m.players || []).map(p => {
+      const hidden = !p.nickname || p.nickname === '匿名';
+      return { account_id: p.account_id || null, personaname: hidden ? '' : p.nickname, hidden_name: hidden, player_slot: p.player_slot,
+        hero_id: p.hero_id, hero_name_zh: p.hero_name_zh, kills: p.kills, deaths: p.deaths, assists: p.assists, gold_per_min: p.gold_per_min, rank_tier: p.rank || 0 };
+    }),
+  };
+}
+
 async function fetchOpenDota() {
   const id = extractMatchId($('#m-id').value);
-  if (!id) return toast('请先在「比赛 ID」填入 OpenDota 比赛编号或链接', 'err');
-  const btn = $('#btn-opendota'); btn.disabled = true; btn.textContent = '拉取中…';
+  if (!id) return toast('请先在「比赛 ID」填入 Dota 2 比赛编号或链接', 'err');
+  const btn = $('#btn-opendota'); btn.disabled = true; btn.textContent = '查询中…';
   const fetchT = (url, ms) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t)); };
   const errs = [];
   try {
     let m = null;
     const proxy = getProxy();
-    if (proxy) {
+    try { m = await fetchPwesports(id, fetchT); }
+    catch (e) { errs.push('完美世界：' + (e.name === 'AbortError' ? '超时' : e.message)); }
+    if (!m && proxy) {
       try {
         const res = await fetchT(`${proxy}/match/${id}`, 30000);
         const body = await res.json().catch(() => ({}));
@@ -670,22 +693,23 @@ async function fetchOpenDota() {
     if (!m) throw new Error(errs.join('；'));
     if (!Array.isArray(m.players) || m.players.length < 2) throw new Error('比赛数据不完整，可能还没同步');
     const parsed = parseOpenDotaMatch(m);
-    parsed.source = m.source === 'steam' ? 'Valve 官方接口' : 'OpenDota';
-    parsed.via = proxy && !errs.some(e => e.startsWith('中转')) ? '中转' : '直连';
+    parsed.source = { pwesports: '完美世界电竞', steam: 'Valve 官方接口' }[m.source] || 'OpenDota';
+    parsed.via = m.source === 'pwesports' ? '直连' : (proxy && !errs.some(e => e.startsWith('中转')) ? '中转' : '直连');
+    parsed.fallbackNote = m.source !== 'pwesports' && errs.length ? errs.join('；') : '';
     parsed.enriched = m.enriched || [];
     showImportModal(parsed);
-  } catch (e) { toast('拉取失败：' + (e.message || e), 'err'); }
-  finally { btn.disabled = false; btn.textContent = '从 OpenDota 拉取'; }
+  } catch (e) { toast('查询失败：' + (e.message || e), 'err'); }
+  finally { btn.disabled = false; btn.textContent = '查询比赛'; }
 }
 // 中转地址设置（存在本浏览器）
 function configProxy() {
   const cur = getProxy();
-  const v = prompt('比赛数据中转地址（Cloudflare Worker）。留空则直连 OpenDota：', cur);
+  const v = prompt('备用数据源中转地址（Cloudflare Worker），完美世界接口查不到时使用。留空则直连 OpenDota：', cur);
   if (v === null) return;
   const clean = v.trim().replace(/\/+$/, '');
   if (clean && !/^https?:\/\//.test(clean)) return toast('地址要以 http(s):// 开头', 'err');
   localStorage.setItem(PROXY_KEY, clean);
-  toast(clean ? '已设置中转：' + clean : '已清除中转，改为直连 OpenDota', 'ok');
+  toast(clean ? '已设置备用中转：' + clean : '已清除中转，备用源改为直连 OpenDota', 'ok');
 }
 
 // 先按 Steam ID、再按同名匹配已有选手
@@ -704,7 +728,7 @@ function showImportModal(parsed) {
     const rk = rankFromTier(r.rankTier);
     return `<tr data-side="${side}" data-idx="${i}">
       <td><span class="side ${side}">${side === 'radiant' ? '天辉' : '夜魇'}</span></td>
-      <td class="wrap"><div>${esc(r.name)}</div><div class="hint">${r.accountId ? 'ID ' + r.accountId : '匿名（未公开资料）'}${rk ? ' · ' + rk.rank + (rk.stars || '') : ''}</div></td>
+      <td class="wrap"><div>${esc(r.name)}</div><div class="hint">${r.accountId ? 'ID ' + r.accountId + (r.hidden ? '（昵称已隐藏）' : '') : '匿名（未公开资料）'}${rk ? ' · ' + rk.rank + (rk.stars || '') : ''}</div></td>
       <td>${esc(r.hero) || '-'}</td>
       <td class="num">${r.kda.join('/')}</td>
       <td><select data-f="pos">${[1, 2, 3, 4, 5].map(x => `<option value="${x}" ${r.pos === x ? 'selected' : ''}>${POS_SHORT[x]}</option>`).join('')}</select></td>
@@ -718,13 +742,14 @@ function showImportModal(parsed) {
   const exists = state.matches.some(m => m.id === parsed.id);
   const anonCount = [...parsed.radiant, ...parsed.dire].filter(r => r.anon).length;
   const noHero = [...parsed.radiant, ...parsed.dire].every(r => !r.hero);
-  showModal(`<h2>OpenDota 导入 · ${esc(parsed.id)}</h2>
-    ${noHero ? '<p class="loss">这场比赛的英雄数据还是空的，OpenDota 可能尚未收录完整，建议几分钟后再拉取。</p>' : ''}
+  showModal(`<h2>比赛导入 · ${esc(parsed.id)}</h2>
+    ${noHero ? `<p class="loss">这场比赛的英雄数据还是空的，${esc(parsed.source)} 可能尚未收录完整，建议几分钟后再查询。</p>` : ''}
+    ${parsed.fallbackNote ? `<p class="hint">完美世界接口不可用，已改用备用源：${esc(parsed.fallbackNote)}</p>` : ''}
     ${anonCount ? `<p class="hint">有 ${anonCount} 名玩家隐藏了资料（匿名），无法自动识别，请在「对应选手」里手动选择；实在不知道是谁可选「跳过」或「新建」。</p>` : ''}
     <div>${parsed.date} · ${parsed.duration ?? '?'} 分 · <span class="side ${parsed.winner}">${parsed.winner === 'radiant' ? '天辉胜' : '夜魇胜'}</span> · 比分 ${parsed.score.join(' : ')}${exists ? ' · <span class="loss">该比赛 ID 已有记录，保存将覆盖</span>' : ''}</div>
     <div class="hint">数据来源：${parsed.source}（${parsed.via}）${parsed.enriched?.includes('stratz') ? ' · 位置由 STRATZ 提供' : ''}</div>
-    <p class="hint">${parsed.enriched?.includes('stratz') ? '' : '位置按分路 + GPM 推测，请核对。'}「对应选手」先按 Steam ID、再按同名自动匹配；选「新建选手」会用 Steam 昵称和 OpenDota 段位建档并绑定 ID，以后自动识别。</p>
-    <div class="table-wrap"><table class="tbl od-table"><thead><tr><th>阵营</th><th>Steam 昵称</th><th>英雄</th><th class="num">K/D/A</th><th>位置</th><th>对应选手</th></tr></thead><tbody>${rows('radiant')}${rows('dire')}</tbody></table></div>
+    <p class="hint">${parsed.enriched?.includes('stratz') ? '' : (parsed.source === '完美世界电竞' ? '位置按 GPM 高低推测（该源无分路数据），请核对。' : '位置按分路 + GPM 推测，请核对。')}「对应选手」先按 Steam ID、再按同名自动匹配；选「新建选手」会用游戏昵称和段位建档并绑定 Steam ID，以后自动识别。</p>
+    <div class="table-wrap"><table class="tbl od-table"><thead><tr><th>阵营</th><th>游戏昵称</th><th>英雄</th><th class="num">K/D/A</th><th>位置</th><th>对应选手</th></tr></thead><tbody>${rows('radiant')}${rows('dire')}</tbody></table></div>
     <div id="od-error" class="loss" style="margin-top:10px"></div>
     <div class="form-actions" style="margin-top:8px">
       <button type="button" class="primary" id="od-fill">填入表单（可再调整）</button>
@@ -759,7 +784,7 @@ function applyImport(saveNow) {
       let name = r.name, n = 2;
       while (state.players.some(p => p.name === name)) name = `${r.name}(${n++})`;
       const rk = rankFromTier(r.rankTier);
-      const note = r.anon ? '匿名导入，请改成真实昵称' : (rk ? '' : '段位未知（OpenDota 导入）');
+      const note = (r.anon || r.hidden) ? '匿名导入，请改成真实昵称' : (rk ? '' : `段位未知（${parsed.source} 导入）`);
       const np = { id: uid(), createdAt: Date.now(), name, rank: rk ? rk.rank : '传奇', stars: rk ? rk.stars : 3, positions: [c.pos], heroes: r.hero ? [r.hero] : [], note, accountId: r.accountId };
       state.players.push(np); c.pid = np.id; created++;
     } else {
@@ -774,8 +799,8 @@ function applyImport(saveNow) {
   let skipped = 0;
   for (const side of ['radiant', 'dire']) { let k = 0; parsed[side].forEach((r, i) => { const c = chosen.get(side + i); if (c.pid === '__skip') { skipped++; return; } if (k < 5) ui.draft[side][k++] = { pid: c.pid, pos: c.pos, hero: r.hero, kda: r.kda }; }); }
   $('#m-id').value = parsed.id; $('#m-date').value = parsed.date; $('#m-duration').value = parsed.duration || '';
-  if (!$('#m-note').value.trim()) $('#m-note').value = `OpenDota 导入 · 比分 ${parsed.score.join(':')}`;
-  $('#match-form-title').textContent = exists ? '编辑比赛：' + parsed.id : '新比赛（OpenDota 导入）';
+  if (!$('#m-note').value.trim()) $('#m-note').value = `${parsed.source} 导入 · 比分 ${parsed.score.join(':')}`;
+  $('#match-form-title').textContent = exists ? '编辑比赛：' + parsed.id : `新比赛（${parsed.source} 导入）`;
   $('#btn-cancel-match').classList.toggle('hidden', !exists);
   hideModal(); importDraft = null; renderTeams();
   const msg = [created ? `新建 ${created} 名选手` : '', bound ? `绑定 ${bound} 个 Steam ID` : '', skipped ? `跳过 ${skipped} 人` : ''].filter(Boolean).join('，');

@@ -58,7 +58,7 @@
             <label class="grow">备注
               <input id="p-note" type="text" maxlength="60" placeholder="可选">
             </label>
-            <label class="grow">Steam ID <span class="hint">可选，用于 OpenDota 自动识别</span>
+            <label class="grow">Steam ID <span class="hint">可选，用于查询比赛时自动识别选手</span>
               <input id="p-account" type="text" inputmode="numeric" placeholder="好友代码 / 32 位或 64 位 ID">
             </label>
           </div>
@@ -113,9 +113,9 @@
     </div>
     <div class="row wrap match-meta">
       <label class="grow">比赛 ID
-        <input id="m-id" type="text" maxlength="80" placeholder="留空自动生成；或填 Dota 2 比赛编号 / OpenDota 链接后拉取">
+        <input id="m-id" type="text" maxlength="80" placeholder="留空自动生成；或填 Dota 2 比赛编号 / 比赛链接后查询">
       </label>
-      <div class="row-btn"><button type="button" id="btn-opendota" title="按比赛编号拉取阵容、英雄、KDA、胜负（中转优先，OpenDota 直连兜底）">从 OpenDota 拉取</button><button type="button" class="ghost" id="btn-proxy-cfg" title="设置比赛数据中转地址">⚙</button></div>
+      <div class="row-btn"><button type="button" id="btn-opendota" title="按比赛编号查询阵容、英雄、KDA、段位、胜负（完美世界国服数据优先，中转 / OpenDota 兜底）">查询比赛</button><button type="button" class="ghost" id="btn-proxy-cfg" title="设置备用数据源中转地址">⚙</button></div>
       <label>日期
         <input id="m-date" type="date">
       </label>
