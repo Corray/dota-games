@@ -577,7 +577,7 @@ function showPlayerDetail(pid) {
   const recent = [...st.results].reverse().slice(0, 12).map(r => [esc(r.date), esc(r.id), `<span class="side ${r.side}">${r.side === 'radiant' ? '天辉' : '夜魇'}</span>`, r.pos ? POS_SHORT[r.pos] : '-', esc(r.hero || '-'), r.kda ? r.kda.join('/') : '-', r.won ? '<span class="win">胜</span>' : '<span class="loss">负</span>']);
   showModal(`
     <h2>${esc(p.name)} ${rankBadge(p)}</h2>
-    <div class="hint">擅长位置：${p.positions.map(i => POS_SHORT[i]).join(' ') || '-'} ｜ 擅长英雄：${p.heroes.map(esc).join('、') || '-'}${p.note ? ' ｜ ' + esc(p.note) : ''}</div>
+    <div class="hint">擅长位置：${p.positions.map(i => POS_SHORT[i]).join(' ') || '-'} ｜ 擅长英雄：${p.heroes.map(esc).join('、') || '-'}${p.note ? ' ｜ ' + esc(p.note) : ''} <button type="button" class="mini" id="pd-recalc" title="按下面的位置 / 英雄统计重置擅长位置和擅长英雄">按战绩重置</button></div>
     <div class="overview" style="margin-top:12px">
       <div class="stat-tile"><div class="k">总场次</div><div class="v">${st.g}</div><div class="s">${st.w} 胜 ${st.g - st.w} 负</div></div>
       <div class="stat-tile"><div class="k">胜率</div><div class="v">${pct(st.w, st.g)}</div><div class="s">${st.streak > 0 ? `当前 ${st.streak} 连胜` : st.streak < 0 ? `当前 ${-st.streak} 连败` : ''}</div></div>
@@ -593,7 +593,63 @@ function showPlayerDetail(pid) {
     </div>
     <h4>最近比赛</h4>${tbl(['日期', '比赛 ID', '阵营', '位置', '英雄', 'K/D/A', '结果'], recent, '-')}
   `);
+  $('#pd-recalc').onclick = () => {
+    const sug = suggestProfile(st);
+    if (!sug.positions.length && !sug.heroes.length) return toast('比赛记录里没有位置和英雄数据', 'err');
+    if (!confirm(`按 ${st.g} 场记录重置「${p.name}」：\n位置：${p.positions.map(i => POS_SHORT[i]).join(' ') || '-'} → ${sug.positions.map(i => POS_SHORT[i]).join(' ') || '(不变)'}\n英雄：${p.heroes.join('、') || '-'} → ${sug.heroes.join('、') || '(不变)'}`)) return;
+    if (sug.positions.length) p.positions = sug.positions;
+    if (sug.heroes.length) p.heroes = sug.heroes;
+    save(); renderAll(); showPlayerDetail(pid); toast('已按战绩重置', 'ok');
+  };
 }
+
+// ============ 按战绩重算擅长位置 / 英雄 ============
+// 位置：按场次排序，占比 ≥ 25% 的保留，最多 2 个（至少 1 个）；英雄：场次 ≥ 2 的按场次取前 5，不足 3 个时按场次补到 3 个
+function suggestProfile(st) {
+  const posList = Object.entries(st.pos).sort((a, b) => b[1].g - a[1].g);
+  const posTotal = posList.reduce((n, [, v]) => n + v.g, 0);
+  const positions = posList.filter(([, v], i) => i === 0 || v.g / posTotal >= 0.25).slice(0, 2).map(([k]) => Number(k)).sort((a, b) => a - b);
+  const heroList = Object.entries(st.heroes).sort((a, b) => b[1].g - a[1].g || b[1].w - a[1].w);
+  let heroes = heroList.filter(([, v]) => v.g >= 2).slice(0, 5).map(([k]) => k);
+  if (heroes.length < 3) heroes = heroList.slice(0, 3).map(([k]) => k);
+  return { positions, heroes };
+}
+function openRecalcModal() {
+  const stats = computeStats(state.matches).players;
+  const minInput = () => Number($('#rc-min')?.value) || 1;
+  const build = () => {
+    const min = minInput();
+    const rows = state.players.map(p => {
+      const st = stats[p.id]; if (!st || st.g < min) return null;
+      const sug = suggestProfile(st);
+      const posNew = sug.positions.length ? sug.positions : p.positions, heroNew = sug.heroes.length ? sug.heroes : p.heroes;
+      const same = (a, b) => [...a].sort().join() === [...b].sort().join();
+      const changed = !same(posNew, p.positions) || !same(heroNew, p.heroes);   // 只是顺序不同不算变化
+      return { p, st, posNew, heroNew, changed };
+    }).filter(Boolean).sort((a, b) => Number(b.changed) - Number(a.changed) || b.st.g - a.st.g);
+    const fmtPos = arr => arr.map(i => POS_SHORT[i]).join(' ') || '-';
+    $('#rc-body').innerHTML = rows.length ? `<div class="hint" style="margin:6px 0">${rows.length} 人有 ≥ ${min} 场记录，其中 ${rows.filter(r => r.changed).length} 人会变化（默认勾选）；位置来自比赛记录里填的位置，英雄来自比赛记录里填的英雄。</div>
+      <div class="table-wrap" style="max-height:55vh;overflow:auto"><table class="tbl"><thead><tr><th></th><th>选手</th><th class="num">场次</th><th>位置：现在 → 建议</th><th>英雄：现在 → 建议</th></tr></thead><tbody>
+      ${rows.map(r => `<tr class="${r.changed ? '' : 'lg-done'}"><td><input type="checkbox" data-rc="${r.p.id}" ${r.changed ? 'checked' : ''}></td><td>${esc(r.p.name)}</td><td class="num">${r.st.g}</td>
+        <td>${fmtPos(r.p.positions)} → <b>${fmtPos(r.posNew)}</b></td><td class="wrap">${r.p.heroes.map(esc).join('、') || '-'} → <b>${r.heroNew.map(esc).join('、') || '-'}</b></td></tr>`).join('')}</tbody></table></div>` : `<p class="empty">没有 ≥ ${min} 场记录的选手</p>`;
+    $('#rc-apply').onclick = () => {
+      let n = 0;
+      for (const cb of $$('#rc-body input[data-rc]:checked')) { const r = rows.find(x => x.p.id === cb.dataset.rc); if (!r) continue; r.p.positions = r.posNew; r.p.heroes = r.heroNew; n++; }
+      if (!n) return toast('没有勾选任何选手', 'err');
+      save(); renderAll(); hideModal(); toast(`已重算 ${n} 名选手的位置和英雄`, 'ok');
+    };
+  };
+  showModal(`<h2>按战绩重算擅长位置 / 英雄</h2>
+    <div class="inline-actions wrap"><label class="inline">最少场次 <input type="number" id="rc-min" min="1" max="50" value="3" style="width:4.5em"></label><span class="hint">位置：占比 ≥ 25% 的保留，最多 2 个。英雄：出场 ≥ 2 次的取前 5，不足 3 个按场次补到 3 个。</span></div>
+    <div id="rc-body"></div>
+    <div class="form-actions"><button type="button" class="primary" id="rc-apply">应用勾选</button><button type="button" class="ghost" id="rc-all">全选</button><button type="button" class="ghost" id="rc-none">全不选</button><button type="button" class="ghost" id="rc-cancel">取消</button></div>`);
+  $('#rc-min').onchange = build;
+  $('#rc-all').onclick = () => $$('#rc-body input[data-rc]').forEach(c => { c.checked = true; });
+  $('#rc-none').onclick = () => $$('#rc-body input[data-rc]').forEach(c => { c.checked = false; });
+  $('#rc-cancel').onclick = hideModal;
+  build();
+}
+$('#btn-recalc').addEventListener('click', openRecalcModal);
 
 function showModal(html) { $('#modal-content').innerHTML = html; $('#modal').classList.remove('hidden'); }
 function hideModal() { $('#modal').classList.add('hidden'); }
