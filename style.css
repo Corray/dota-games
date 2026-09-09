@@ -301,3 +301,22 @@ tr.expanded td{background:var(--panel2)}
 .md-name{min-width:90px}
 .md-hero{color:var(--muted);flex:1}
 @media (max-width:700px){.md-grid{grid-template-columns:1fr}}
+
+/* ---- 录像解析 ---- */
+#match-table button.has-replay{border-color:var(--radiant);color:var(--radiant)}
+.rp-chart{width:100%;height:auto;display:block;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin:4px 0 8px;touch-action:none}
+.rp-chart .grid{stroke:var(--border);stroke-width:1}
+.rp-chart .zero{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3}
+.rp-chart .tick{fill:var(--muted);font-size:11px}
+.rp-chart .ln{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.rp-chart .cross{stroke:var(--text);stroke-width:1;opacity:.6}
+.rp-tip{position:absolute;background:#222a34;border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:5;min-width:140px;line-height:1.6}
+.rp-tip div{display:flex;justify-content:space-between;gap:10px;color:var(--muted)}
+.rp-tip b{color:var(--text);font-variant-numeric:tabular-nums}
+.rp-table summary{cursor:pointer;margin:0 0 6px}
+.rp-bp{display:flex;flex-wrap:wrap;gap:5px}
+.rp-bp-item{font-size:12px;padding:2px 8px;border-radius:12px;border:1px solid var(--border);background:var(--bg)}
+.rp-bp-item.radiant{border-color:var(--radiant);color:var(--radiant)}
+.rp-bp-item.dire{border-color:var(--dire);color:var(--dire)}
+.rp-bp-item.ban{opacity:.55;text-decoration:line-through}
+.modal-box{position:relative}

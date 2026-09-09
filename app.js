@@ -25,6 +25,7 @@ const HERO_BY_ID = {
 const HEROES = Object.values(HERO_BY_ID);
 const OPENDOTA = 'https://api.opendota.com/api';
 const PWESPORTS = 'https://gwapi.pwesports.cn/appdatacenter/api/v1/dota2/matches'; // 完美世界电竞数据中心，国服数据、中文昵称，浏览器可直连
+const PWESPORTS_REPLAY = 'https://gwapi.pwesports.cn/appdatacenter/api/v1/dota2/match/replay'; // 完美世界录像解析：分路、经济曲线、击杀事件
 const DEFAULT_PROXY = 'https://dota-match-proxy.corray.workers.dev'; // Cloudflare Worker 中转，源码见 worker/
 const PROXY_KEY = 'dota-proxy-url';
 const getProxy = () => (localStorage.getItem(PROXY_KEY) ?? DEFAULT_PROXY).trim().replace(/\/+$/, '');
@@ -429,12 +430,122 @@ function startEditMatch(m) {
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const m = state.matches.find(m => m.id === b.dataset.id); if (!m) return;
     if (b.dataset.act === 'edit') startEditMatch(m);
+    else if (b.dataset.act === 'replay') { if (m.replay) showReplayModal(m); else loadReplay(m, b); }
     else if (b.dataset.act === 'del') {
       if (!confirm(`删除比赛 ${m.id}？`)) return;
       state.matches = state.matches.filter(x => x.id !== m.id); save(); renderMatches(); toast('已删除', 'ok');
     }
   });
 })();
+
+// ============ 录像解析（完美世界 replay 接口） ============
+const STEAM64_BASE = 76561197960265728n;
+// 压缩成小对象存进 match.replay（每场约 5KB；原始返回 120KB+，localStorage 存不下）
+function compactReplay(r) {
+  const heroes = (r.heroInfos || []).map(h => ({ h: h.heroId, line: h.line || 0, r: !!h.radiant, name: h.userName || '', acc: h.steamId ? Number(BigInt(h.steamId) - STEAM64_BASE) : null }));
+  if (!heroes.length) return null;
+  const pack = x => ({ h: x.heroId, lvl: x.level, k: x.kills, d: x.deaths, a: x.assists, lh: x.lastHits, dn: x.denies, nw: x.netWorth, xp: x.experience });
+  const rg = r.radiantGraphList || [], dg = r.direGraphList || [];
+  const n = Math.min(rg.length, dg.length);
+  return {
+    at: Date.now(), leagueId: r.leagueId || 0, gameMode: r.gameMode || 0, heroes,
+    lanes: (r.lineAnalyses || []).map(l => ({ type: l.type, goldType: l.lineGoldType, rad: (l.radiantHeroes || []).map(pack), dire: (l.direHeroes || []).map(pack) })),
+    gold: Array.from({ length: n }, (_, i) => rg[i].gold - dg[i].gold), exp: Array.from({ length: n }, (_, i) => rg[i].exp - dg[i].exp),
+    kills: (r.logEvents || []).filter(e => e.type === 4).map(e => [e.time, e.sourceId, e.targetId]),
+    wr: (r.graphWinRate || []).map(x => Math.round(x * 100)),
+    res: { radiant: r.radiantResources || null, dire: r.direResources || null },
+    bp: (r.picksBans || []).sort((a, b) => a.order - b.order).map(x => [x.heroId, x.pick ? 1 : 0, x.team]),
+  };
+}
+async function loadReplay(m, btn) {
+  const id = extractMatchId(m.id);
+  if (!id) return toast('这场比赛的 ID 不是 Dota 2 比赛编号，没有可拉取的解析', 'err');
+  if (btn) { btn.disabled = true; btn.textContent = '拉取中…'; }
+  try {
+    const c = new AbortController(); const t = setTimeout(() => c.abort(), 20000);
+    const res = await fetch(`${PWESPORTS_REPLAY}?matchId=${id}`, { signal: c.signal }).finally(() => clearTimeout(t));
+    if (!res.ok) throw new Error('返回 ' + res.status);
+    const body = await res.json();
+    if (body.code !== 0) throw new Error(body.message || '返回 code ' + body.code);
+    const rp = compactReplay(body.result || {});
+    if (!rp) { toast('暂无解析：完美世界还没有这场比赛的录像数据，刚结束的比赛通常要等一会儿', 'err'); return; }
+    m.replay = rp; save(); renderMatches(); showReplayModal(m); toast('解析已保存', 'ok');
+  } catch (e) { toast('拉取解析失败：' + (e.name === 'AbortError' ? '超时' : e.message), 'err'); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = m.replay ? '解析 ✓' : '详情解析'; } }
+}
+const fmtClock = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+// 折线图（单轴）：series = [{ v: [], color }]，zero = 是否以 0 为中线并按正负分色（正 = 天辉领先）
+function lineChartSvg(id, series, { zero = false, yFmt = v => String(v), height = 150, pct = false } = {}) {
+  const W = 640, H = height, L = 46, R = 10, T = 10, B = 22;
+  const n = Math.max(...series.map(s => s.v.length)); if (n < 2) return '<p class="hint">数据不足</p>';
+  const all = series.flatMap(s => s.v);
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (pct) { lo = 0; hi = 100; } else if (zero) { const m = Math.max(Math.abs(lo), Math.abs(hi), 1); lo = -m; hi = m; } else if (lo === hi) { lo -= 1; hi += 1; }
+  const x = i => L + (W - L - R) * i / (n - 1), y = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  const ticks = pct ? [0, 25, 50, 75, 100] : zero ? [lo, lo / 2, 0, hi / 2, hi] : [lo, (lo + hi) / 2, hi];
+  const grid = ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" class="${v === 0 && zero ? 'zero' : 'grid'}"/><text x="${L - 6}" y="${(y(v) + 4).toFixed(1)}" class="tick" text-anchor="end">${yFmt(v)}</text>`).join('');
+  const step = Math.max(1, Math.round(n / 8)); const xt = []; for (let i = 0; i < n; i += step) xt.push(i);
+  if (n - 1 - xt[xt.length - 1] >= step / 2) xt.push(n - 1); else xt[xt.length - 1] = n - 1;   // 末尾刻度太挤就并成一个
+  const xlab = xt.map(i => `<text x="${x(i).toFixed(1)}" y="${H - 6}" class="tick" text-anchor="middle">${i}</text>`).join('');
+  const path = v => v.map((val, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(val).toFixed(1)}`).join('');
+  const lines = series.map((s, si) => zero
+    ? `<clipPath id="${id}-up${si}"><rect x="0" y="0" width="${W}" height="${y(0).toFixed(1)}"/></clipPath><clipPath id="${id}-dn${si}"><rect x="0" y="${y(0).toFixed(1)}" width="${W}" height="${H}"/></clipPath>
+       <path d="${path(s.v)}" class="ln" stroke="#6fa52c" clip-path="url(#${id}-up${si})"/><path d="${path(s.v)}" class="ln" stroke="#d0463b" clip-path="url(#${id}-dn${si})"/>`
+    : `<path d="${path(s.v)}" class="ln" stroke="${s.color}"/>`).join('');
+  return `<svg class="rp-chart" id="${id}" viewBox="0 0 ${W} ${H}" data-n="${n}" data-l="${L}" data-r="${R}" role="img">${grid}${xlab}${lines}<line class="cross hidden" y1="${T}" y2="${H - B}" x1="0" x2="0"/><g class="dots"></g></svg>`;
+}
+function showReplayModal(m) {
+  const rp = m.replay; if (!rp) return;
+  const P = playerMap();
+  const heroName = h => HERO_BY_ID[h] || `英雄#${h}`;
+  const byHero = new Map(rp.heroes.map(h => [h.h, h]));
+  // 解析里的英雄 ↔ 比赛记录里的选手：先按 Steam ID，再按英雄名
+  const who = h => { const info = byHero.get(h); if (!info) return heroName(h);
+    const side = m[info.r ? 'radiant' : 'dire'];
+    const p = (info.acc && side.find(s => P.get(s.pid)?.accountId === info.acc)) || side.find(s => s.hero === heroName(h));
+    return p ? pname(P, p.pid) : (info.name || '未知'); };
+  const sideOf = h => byHero.get(h)?.r ? 'radiant' : 'dire';
+  const kills = { radiant: 0, dire: 0 }; rp.kills.forEach(([, k]) => kills[sideOf(k)]++);
+  const laneName = { 1: '优势路', 2: '中路', 3: '劣势路' };
+  const laneRow = (h, x) => `<tr><td><span class="side ${sideOf(h.h)}">${sideOf(h.h) === 'radiant' ? '天辉' : '夜魇'}</span></td><td>${esc(who(h.h))}</td><td>${esc(heroName(h.h))}</td><td class="num">${h.lvl}</td><td class="num">${h.lh}/${h.dn}</td><td class="num">${h.nw}</td><td class="num">${h.k}/${h.d}/${h.a}</td></tr>`;
+  const roster = side => `<table class="tbl"><thead><tr><th>号位</th><th>选手</th><th>英雄</th></tr></thead><tbody>${rp.heroes.filter(h => h.r === (side === 'radiant')).sort((a, b) => (a.line || 9) - (b.line || 9)).map(h => `<tr><td>${h.line ? POS_SHORT[h.line] || h.line : '-'}</td><td>${esc(who(h.h))}</td><td>${esc(heroName(h.h))}</td></tr>`).join('')}</tbody></table>`;
+  const posDiff = (() => { let n = 0; for (const side of ['radiant', 'dire']) for (const s of m[side]) { const info = rp.heroes.find(h => h.r === (side === 'radiant') && heroName(h.h) === s.hero); if (info && info.line && info.line !== s.pos) n++; } return n; })();
+  const resRow = (side, label) => { const r = rp.res[side]; return r ? `<tr><td><span class="side ${side}">${label}</span></td><td class="num">${r.observerWards}</td><td class="num">${r.sentryWards}</td><td class="num">${r.campsStacked}</td><td class="num">${r.expRune}</td><td class="num">${r.abilityRune}</td><td class="num">${r.smoke}</td><td class="num">${r.dust}</td><td class="num">${r.gem}</td></tr>` : ''; };
+  const table = `<details class="rp-table"><summary class="hint">查看逐分钟数据表</summary><div class="table-wrap" style="max-height:220px;overflow:auto"><table class="tbl"><thead><tr><th>分钟</th><th class="num">经济差</th><th class="num">经验差</th><th class="num">天辉胜率</th></tr></thead><tbody>${rp.gold.map((g, i) => `<tr><td>${i}</td><td class="num">${g > 0 ? '+' : ''}${g}</td><td class="num">${rp.exp[i] > 0 ? '+' : ''}${rp.exp[i]}</td><td class="num">${rp.wr[i] ?? '-'}%</td></tr>`).join('')}</tbody></table></div></details>`;
+  showModal(`<h2>比赛解析 · ${esc(m.id)} <span class="hint">${esc(m.date)}${m.duration ? ` · ${m.duration} 分` : ''} · <span class="side ${m.winner}">${m.winner === 'radiant' ? '天辉胜' : '夜魇胜'}</span> · 人头 ${kills.radiant} : ${kills.dire}</span></h2>
+    <div class="inline-actions wrap" style="margin:6px 0 10px"><span class="hint">数据来源：完美世界录像解析，保存于 ${new Date(rp.at).toLocaleString('zh-CN')}</span><button type="button" class="mini" id="rp-refresh">重新拉取</button>
+      ${posDiff ? `<button type="button" class="mini" id="rp-fix-pos" title="把比赛记录里每个人的号位改成解析给出的分路号位">按解析修正本场号位（${posDiff} 处不同）</button>` : '<span class="hint">号位与解析一致</span>'}</div>
+    <h4>阵容与分路</h4><div class="grid2"><div>${roster('radiant')}</div><div>${roster('dire')}</div></div>
+    <h4>经济差（天辉 − 夜魇，绿色 = 天辉领先）</h4>${lineChartSvg('rp-gold', [{ v: rp.gold }], { zero: true, yFmt: v => (v / 1000).toFixed(0) + 'k' })}
+    <h4>经验差（天辉 − 夜魇）</h4>${lineChartSvg('rp-exp', [{ v: rp.exp }], { zero: true, yFmt: v => (v / 1000).toFixed(0) + 'k' })}
+    <h4>天辉胜率走势</h4>${lineChartSvg('rp-wr', [{ v: rp.wr, color: '#6fa52c' }], { pct: true, yFmt: v => v + '%', height: 120 })}
+    <div id="rp-tip" class="rp-tip hidden"></div>${table}
+    ${rp.lanes.length ? `<h4>对线期（约 10 分钟）</h4><div class="table-wrap"><table class="tbl"><thead><tr><th>阵营</th><th>选手</th><th>英雄</th><th class="num">等级</th><th class="num">正/反补</th><th class="num">净资产</th><th class="num">K/D/A</th></tr></thead><tbody>${rp.lanes.map(l => `<tr><td colspan="7" class="hint" style="background:var(--panel2)">${laneName[l.type] || '分路 ' + l.type}</td></tr>${l.rad.map(h => laneRow(h)).join('')}${l.dire.map(h => laneRow(h)).join('')}`).join('')}</tbody></table></div>` : ''}
+    ${rp.res.radiant ? `<h4>资源投入</h4><div class="table-wrap"><table class="tbl"><thead><tr><th>阵营</th><th class="num">假眼</th><th class="num">真眼</th><th class="num">堆野</th><th class="num">经验符</th><th class="num">技能符</th><th class="num">雾</th><th class="num">粉</th><th class="num">宝石</th></tr></thead><tbody>${resRow('radiant', '天辉')}${resRow('dire', '夜魇')}</tbody></table></div>` : ''}
+    ${rp.bp.length ? `<h4>BP 顺序</h4><div class="rp-bp">${rp.bp.map(([h, pick, team], i) => `<span class="rp-bp-item ${team === 0 ? 'radiant' : 'dire'} ${pick ? '' : 'ban'}" title="第 ${i + 1} 手 · ${team === 0 ? '天辉' : '夜魇'}${pick ? '选' : '禁'}">${i + 1}. ${esc(heroName(h))}${pick ? '' : ' ✕'}</span>`).join('')}</div>` : ''}
+    <h4>击杀时间线 <span class="hint" style="text-transform:none">${rp.kills.length} 次英雄击杀</span></h4>
+    <div class="table-wrap" style="max-height:260px;overflow:auto"><table class="tbl"><tbody>${rp.kills.map(([t, k, v]) => `<tr><td class="num" style="width:60px">${fmtClock(t)}</td><td><span class="side ${sideOf(k)}">${esc(who(k))}</span> <span class="hint">${esc(heroName(k))}</span></td><td class="hint">击杀</td><td><span class="side ${sideOf(v)}">${esc(who(v))}</span> <span class="hint">${esc(heroName(v))}</span></td></tr>`).join('') || '<tr><td class="hint">无</td></tr>'}</tbody></table></div>`);
+  $('#rp-refresh').onclick = () => loadReplay(m, null);
+  const fix = $('#rp-fix-pos');
+  if (fix) fix.onclick = () => {
+    let n = 0;
+    for (const side of ['radiant', 'dire']) for (const s of m[side]) { const info = rp.heroes.find(h => h.r === (side === 'radiant') && heroName(h.h) === s.hero); if (info && info.line && info.line !== s.pos) { s.pos = info.line; n++; } }
+    save(); renderMatches(); toast(`已修正 ${n} 个号位`, 'ok'); showReplayModal(m);
+  };
+  // 悬停十字线：三张图共用一个 X（分钟），提示框列出该分钟的三项数值
+  const tip = $('#rp-tip'); const charts = $$('#modal-content .rp-chart');
+  const show = (svg, evt) => {
+    const rect = svg.getBoundingClientRect(); const n = Number(svg.dataset.n), L = Number(svg.dataset.l), R = Number(svg.dataset.r);
+    const px = (evt.clientX - rect.left) / rect.width * 640; const i = Math.max(0, Math.min(n - 1, Math.round((px - L) / (640 - L - R) * (n - 1))));
+    const xx = L + (640 - L - R) * i / (n - 1);
+    charts.forEach(c => { const cl = c.querySelector('.cross'); cl.classList.remove('hidden'); cl.setAttribute('x1', xx); cl.setAttribute('x2', xx); });
+    tip.classList.remove('hidden');
+    tip.innerHTML = `<b>第 ${i} 分钟</b><div>经济差 <b>${rp.gold[i] > 0 ? '+' : ''}${rp.gold[i] ?? '-'}</b></div><div>经验差 <b>${rp.exp[i] > 0 ? '+' : ''}${rp.exp[i] ?? '-'}</b></div><div>天辉胜率 <b>${rp.wr[i] ?? '-'}%</b></div>`;
+    const box = $('#modal-content').getBoundingClientRect();
+    tip.style.left = Math.min(evt.clientX - box.left + 14, box.width - 170) + 'px'; tip.style.top = (evt.clientY - box.top + 14) + 'px';
+  };
+  charts.forEach(c => { c.addEventListener('pointermove', e => show(c, e)); c.addEventListener('pointerleave', () => { tip.classList.add('hidden'); charts.forEach(x => x.querySelector('.cross').classList.add('hidden')); }); });
+}
 
 // 单场比赛详情块（选手详情弹窗里展开用）；highlight = 高亮的选手
 function matchDetailHtml(m, P, highlight) {
@@ -468,7 +579,7 @@ function renderMatches() {
     <td class="wrap">${lineupHtml(P, m.radiant, m.winner === 'radiant')}</td>
     <td class="wrap">${lineupHtml(P, m.dire, m.winner === 'dire')}</td>
     <td class="num">${m.duration ? m.duration + ' 分' : '-'}</td>
-    <td><div class="actions"><button data-act="edit" data-id="${esc(m.id)}">编辑</button><button class="danger" data-act="del" data-id="${esc(m.id)}">删除</button></div></td>
+    <td><div class="actions"><button data-act="replay" data-id="${esc(m.id)}" class="${m.replay ? 'has-replay' : ''}" title="${m.replay ? '已保存解析，点击查看' : '从完美世界拉取录像解析：分路、经济曲线、击杀时间线'}">${m.replay ? '解析 ✓' : '详情解析'}</button><button data-act="edit" data-id="${esc(m.id)}">编辑</button><button class="danger" data-act="del" data-id="${esc(m.id)}">删除</button></div></td>
   </tr>`).join('');
 }
 
