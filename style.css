@@ -287,3 +287,17 @@ tr.lg-done td{opacity:.55}
 .tn-sub-row select{width:auto;min-width:120px;padding:4px 8px;font-size:13px}
 .tn-sub-row .tag button{background:none;border:0;color:var(--muted);cursor:pointer;padding:0 2px;line-height:1}
 .tn-sub-row .tag button:hover{color:var(--danger)}
+
+/* ---- 选手详情：展开比赛 ---- */
+tr.expanded td{background:var(--panel2)}
+.match-detail-row td{background:var(--bg)!important;white-space:normal;padding:10px 12px}
+.md-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.md-side{border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+.md-side.won{border-color:var(--radiant)}
+.md-side.dire.won{border-color:var(--dire)}
+.md-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.md-p{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px}
+.md-p.me{font-weight:700;color:var(--accent)}
+.md-name{min-width:90px}
+.md-hero{color:var(--muted);flex:1}
+@media (max-width:700px){.md-grid{grid-template-columns:1fr}}

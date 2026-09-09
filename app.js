@@ -436,6 +436,15 @@ function startEditMatch(m) {
   });
 })();
 
+// 单场比赛详情块（选手详情弹窗里展开用）；highlight = 高亮的选手
+function matchDetailHtml(m, P, highlight) {
+  const side = (key, label) => `<div class="md-side ${key} ${m.winner === key ? 'won' : ''}"><div class="md-head"><span class="side ${key}">${label}</span>${m.winner === key ? '<span class="win">胜</span>' : '<span class="loss">负</span>'}</div>
+    ${[...m[key]].sort((a, b) => (a.pos || 9) - (b.pos || 9)).map(s => `<div class="md-p ${s.pid === highlight ? 'me' : ''}">${s.pos ? `<span class="pos-chip">${POS_SHORT[s.pos] || s.pos}</span>` : '<span class="pos-chip">-</span>'}<span class="md-name">${esc(pname(P, s.pid))}</span><span class="md-hero">${esc(s.hero || '')}</span>${s.kda ? `<span class="kda-mini">${s.kda.join('/')}</span>` : ''}</div>`).join('')}</div>`;
+  return `<div class="match-detail">
+    <div class="hint" style="margin-bottom:6px">${esc(m.date)}${m.duration ? ` · ${m.duration} 分` : ''}${m.note ? ` · ${esc(m.note)}` : ''} <button type="button" class="mini" data-act="edit-match" data-mid="${esc(m.id)}">去编辑这场比赛</button></div>
+    <div class="md-grid">${side('radiant', '天辉')}${side('dire', '夜魇')}</div></div>`;
+}
+
 function lineupHtml(P, team, won) {
   return `<div class="lineup ${won ? 'won' : ''}">${[...team].sort((a, b) => (a.pos || 9) - (b.pos || 9)).map(s =>
     `<span class="lp">${s.pos ? `<span class="pos-chip">${s.pos}</span>` : ''}${esc(pname(P, s.pid))}${s.hero ? `<span class="hero">·${esc(s.hero)}</span>` : ''}${s.kda ? `<span class="kda-mini" title="K/D/A">${s.kda.join('/')}</span>` : ''}</span>`).join('')}</div>`;
@@ -574,7 +583,7 @@ function showPlayerDetail(pid) {
   const byHero = Object.entries(st.heroes).sort((a, b) => b[1].g - a[1].g || b[1].w - a[1].w).map(([k, v]) => [esc(k), v.g, v.w, pct(v.w, v.g)]);
   const mates = Object.entries(st.mates).filter(([id]) => P.has(id)).sort((a, b) => pctNum(b[1].w, b[1].g) - pctNum(a[1].w, a[1].g) || b[1].g - a[1].g).map(([id, v]) => [esc(pname(P, id)), v.g, v.w, pct(v.w, v.g)]);
   const opps = Object.entries(st.opps).filter(([id]) => P.has(id)).sort((a, b) => pctNum(b[1].w, b[1].g) - pctNum(a[1].w, a[1].g) || b[1].g - a[1].g).map(([id, v]) => [esc(pname(P, id)), v.g, v.w, pct(v.w, v.g)]);
-  const recent = [...st.results].reverse().slice(0, 12).map(r => [esc(r.date), esc(r.id), `<span class="side ${r.side}">${r.side === 'radiant' ? '天辉' : '夜魇'}</span>`, r.pos ? POS_SHORT[r.pos] : '-', esc(r.hero || '-'), r.kda ? r.kda.join('/') : '-', r.won ? '<span class="win">胜</span>' : '<span class="loss">负</span>']);
+  const recent = [...st.results].reverse().slice(0, 12).map(r => [esc(r.date), `<button type="button" class="link" data-act="expand-match" data-mid="${esc(r.id)}" title="点击展开 / 收起这场比赛的详情">${esc(r.id)}</button>`, `<span class="side ${r.side}">${r.side === 'radiant' ? '天辉' : '夜魇'}</span>`, r.pos ? POS_SHORT[r.pos] : '-', esc(r.hero || '-'), r.kda ? r.kda.join('/') : '-', r.won ? '<span class="win">胜</span>' : '<span class="loss">负</span>']);
   showModal(`
     <h2>${esc(p.name)} ${rankBadge(p)}</h2>
     <div class="hint">擅长位置：${p.positions.map(i => POS_SHORT[i]).join(' ') || '-'} ｜ 擅长英雄：${p.heroes.map(esc).join('、') || '-'}${p.note ? ' ｜ ' + esc(p.note) : ''} <button type="button" class="mini" id="pd-recalc" title="按下面的位置 / 英雄统计重置擅长位置和擅长英雄">按战绩重置</button></div>
@@ -591,8 +600,20 @@ function showPlayerDetail(pid) {
       <div><h4>队友（同队时的胜率）</h4>${tbl(['队友', '#同队', '#胜', '#胜率'], mates, '-')}</div>
       <div><h4>对手（对阵时的胜率）</h4>${tbl(['对手', '#对阵', '#胜', '#胜率'], opps, '-')}</div>
     </div>
-    <h4>最近比赛</h4>${tbl(['日期', '比赛 ID', '阵营', '位置', '英雄', 'K/D/A', '结果'], recent, '-')}
+    <h4>最近比赛 <span class="hint" style="text-transform:none">点比赛 ID 展开详情</span></h4>${tbl(['日期', '比赛 ID', '阵营', '位置', '英雄', 'K/D/A', '结果'], recent, '-')}
   `);
+  // 点比赛 ID：在该行下方展开 / 收起完整对阵
+  $('#modal-content').onclick = e => {
+    const b = e.target.closest('button[data-act]'); if (!b) return;
+    if (b.dataset.act === 'edit-match') { const m = state.matches.find(x => x.id === b.dataset.mid); if (m) { hideModal(); startEditMatch(m); } return; }
+    if (b.dataset.act !== 'expand-match') return;
+    const tr = b.closest('tr'); const next = tr.nextElementSibling;
+    if (next && next.classList.contains('match-detail-row')) { next.remove(); tr.classList.remove('expanded'); return; }
+    const m = state.matches.find(x => x.id === b.dataset.mid);
+    const row = document.createElement('tr'); row.className = 'match-detail-row';
+    row.innerHTML = `<td colspan="7">${m ? matchDetailHtml(m, P, pid) : '<span class="hint">这场比赛的记录已被删除</span>'}</td>`;
+    tr.after(row); tr.classList.add('expanded');
+  };
   $('#pd-recalc').onclick = () => {
     const sug = suggestProfile(st);
     if (!sug.positions.length && !sug.heroes.length) return toast('比赛记录里没有位置和英雄数据', 'err');
