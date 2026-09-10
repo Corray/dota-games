@@ -350,3 +350,38 @@ tr.expanded td{background:var(--panel2)}
 .au-t.tC{background:#2f3f6b;color:#c2d0ff}
 .au-t.tD{background:#3a3f4a;color:#c7ccd6}
 tr.au-done{opacity:.55}
+
+/* ---- 拍卖流程（L2）---- */
+.au-order{margin:8px 0;font-size:12px;color:#9aa4b2;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.au-order b{color:#e6e9ef;margin-right:4px}
+.au-rd{font-size:11px;padding:1px 6px;border-radius:4px;background:#232a38;color:#b8c2d0;white-space:nowrap}
+.au-stage{margin-top:14px;border-color:#8a6d1f;box-shadow:0 0 0 1px rgba(224,179,65,.15)}
+.au-lot{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.04);margin-bottom:10px}
+.au-lot-nm{font-size:17px}
+.au-mode{margin-left:auto;font-size:12px;color:#e0b341}
+.au-cur{font-size:14px;margin-bottom:8px;display:flex;align-items:center;gap:10px}
+.au-cur b{font-size:18px;color:#e0b341}
+.au-clock{margin-left:auto;font-variant-numeric:tabular-nums;font-size:22px;font-weight:700;padding:2px 10px;border-radius:8px;background:#232a38;color:#b8c2d0}
+.au-clock.warn{background:#4a3a10;color:#ffd166}
+.au-clock.out{background:#4a1818;color:#ff8080}
+.au-chain{margin:8px 0;font-size:12px;color:#9aa4b2;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.au-elig{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.au-elig .tag.off,.au-order .tag.off{opacity:.45}
+.au-sealed-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:8px 0}
+.au-sealed-cell{display:flex;flex-direction:column;gap:3px;font-size:12px}
+.au-sealed-cell span{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.au-sealed-cell i{font-style:normal;font-size:10px;color:#9aa4b2}
+.au-sealed-cell.off{opacity:.45}
+.au-sealed-cell input{padding:5px 7px}
+tr.au-invalid{opacity:.6}
+tr.au-invalid td{background:rgba(255,80,80,.05)}
+.au-dist{white-space:nowrap}
+.au-dist .au-t{min-width:2.2em;padding:0 4px;margin-left:3px}
+.au-dist i{font-style:normal;font-size:11px;color:#9aa4b2;margin:0 2px 0 2px}
+/* button.mini 定义在 button.primary 之后会盖掉橙底只留深字，主操作用这个类 */
+button.mini.au-go{background:var(--accent);border-color:var(--accent);color:#1a1200;font-weight:600}
+button.mini.au-go:hover{filter:brightness(1.08)}
+/* 全局 input[type=number]{width:100%} 是 (0,1,1)，纯类选择器压不住，得带上元素名 */
+input.au-nnum{width:3.4em;padding:4px 2px;text-align:center;-moz-appearance:textfield}
+input.au-nnum.wide{width:4.4em}
+.au-nnum::-webkit-outer-spin-button,.au-nnum::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
