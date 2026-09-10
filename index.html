@@ -227,21 +227,31 @@
     </div>
   </div>
 
+  <div class="card">
+    <h3>英雄统计</h3>
+    <div class="table-wrap">
+      <table class="tbl" id="hero-table">
+        <thead><tr><th>英雄</th><th class="num">场次</th><th class="num">胜</th><th class="num">胜率</th><th>使用者</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="two-col">
     <div class="card">
-      <h3>英雄统计</h3>
+      <h3>最佳双人组合 <span class="hint">同队 ≥ 2 场，按胜率从高到低</span></h3>
       <div class="table-wrap">
-        <table class="tbl" id="hero-table">
-          <thead><tr><th>英雄</th><th class="num">场次</th><th class="num">胜</th><th class="num">胜率</th><th>使用者</th></tr></thead>
+        <table class="tbl" id="duo-table">
+          <thead><tr><th>组合</th><th class="num">同队</th><th class="num">胜</th><th class="num">负</th><th class="num">胜率</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
     </div>
     <div class="card">
-      <h3>最佳双人组合 <span class="hint">同队 ≥ 2 场</span></h3>
+      <h3>最差双人组合 <span class="hint">同队 ≥ 2 场，按胜率从低到高</span></h3>
       <div class="table-wrap">
-        <table class="tbl" id="duo-table">
-          <thead><tr><th>组合</th><th class="num">同队</th><th class="num">胜</th><th class="num">胜率</th></tr></thead>
+        <table class="tbl" id="duo-worst-table">
+          <thead><tr><th>组合</th><th class="num">同队</th><th class="num">胜</th><th class="num">负</th><th class="num">胜率</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>

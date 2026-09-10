@@ -595,6 +595,7 @@ let lastStatsRows = [];
   });
   $('#stats-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#duo-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
+  $('#duo-worst-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#hero-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#btn-copy-md').addEventListener('click', async () => {
     const head = ['选手', '段位', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
@@ -674,12 +675,17 @@ function renderStats() {
     <td class="wrap">${Object.entries(h.users).sort((a, b) => b[1] - a[1]).map(([pid, n]) => `<button class="link" data-pid="${pid}">${esc(pname(P, pid))}</button><span class="hint">×${n}</span>`).join('　')}</td>
   </tr>`).join('') : `<tr><td colspan="5" class="empty">比赛里填了英雄才会有统计</td></tr>`;
 
-  // 双人组合
-  const duos = Object.values(st.duos).filter(d => d.g >= 2 && P.has(d.a) && P.has(d.b)).sort((a, b) => pctNum(b.w, b.g) - pctNum(a.w, a.g) || b.g - a.g).slice(0, 15);
-  $('#duo-table tbody').innerHTML = duos.length ? duos.map(d => `<tr>
+  // 双人组合（最佳 / 最差）
+  const allDuos = Object.values(st.duos).filter(d => d.g >= 2 && P.has(d.a) && P.has(d.b));
+  const duoRow = d => `<tr>
     <td><button class="link" data-pid="${d.a}">${esc(pname(P, d.a))}</button> + <button class="link" data-pid="${d.b}">${esc(pname(P, d.b))}</button></td>
-    <td class="num">${d.g}</td><td class="num">${d.w}</td><td class="num"><strong>${pct(d.w, d.g)}</strong></td>
-  </tr>`).join('') : `<tr><td colspan="4" class="empty">同队 ≥ 2 场的组合才会显示</td></tr>`;
+    <td class="num">${d.g}</td><td class="num win">${d.w}</td><td class="num loss">${d.g - d.w}</td><td class="num"><strong>${pct(d.w, d.g)}</strong></td>
+  </tr>`;
+  const duoEmpty = `<tr><td colspan="5" class="empty">同队 ≥ 2 场的组合才会显示</td></tr>`;
+  const bestDuos = [...allDuos].sort((a, b) => pctNum(b.w, b.g) - pctNum(a.w, a.g) || b.g - a.g).slice(0, 15);
+  const worstDuos = [...allDuos].sort((a, b) => pctNum(a.w, a.g) - pctNum(b.w, b.g) || b.g - a.g).slice(0, 15);
+  $('#duo-table tbody').innerHTML = bestDuos.length ? bestDuos.map(duoRow).join('') : duoEmpty;
+  $('#duo-worst-table tbody').innerHTML = worstDuos.length ? worstDuos.map(duoRow).join('') : duoEmpty;
 }
 
 // ============ 选手详情弹窗 ============
