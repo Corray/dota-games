@@ -14,7 +14,7 @@ const TB_ROUND = 1000;                                  // 加赛所在的特殊
 const GN = i => String.fromCharCode(65 + i);            // 组名 A/B/C…
 const regRounds = st => st.rounds.filter(r => !r.extra);
 const BO_OPTS = [1, 3, 5, 7];
-const tui = { view: 'list', tid: null, sub: 'teams', stageIdx: 0, pending: null };
+const tui = { view: 'list', tid: null, sub: 'teams', stageIdx: 0, pending: null, rosterQ: '' };
 
 // ============ 基础访问 ============
 const cur = () => T().find(t => t.id === tui.tid) || null;
@@ -297,7 +297,7 @@ function balancedRandomGroups(pids, k, opt) {
 function openBalanceModal(t) {
   const assigned = [...assignedPids(t)];
   const subSet = new Set(t.subs || []);
-  const free = S().players.filter(p => !assigned.includes(p.id) && !subSet.has(p.id)).map(p => p.id);
+  const free = rosterPlayers(t).filter(p => !assigned.includes(p.id) && !subSet.has(p.id)).map(p => p.id);
   const readOpt = () => ({
     wRank: Number($('#bl-w-rank').value) || 0, wWin: Number($('#bl-w-win').value) || 0, wKda: Number($('#bl-w-kda').value) || 0,
     minGames: Number($('#bl-min').value) || 1, positions: $('#bl-pos').checked, includeFree: $('#bl-free').checked, k: Math.max(2, Number($('#bl-k').value) || 2),
@@ -326,7 +326,7 @@ function openBalanceModal(t) {
       <label class="narrow" title="场次少于此数的选手，胜率 / KDA 按中性值算">最少场次<input type="number" id="bl-min" min="1" max="50" value="3"></label>
     </div>
     <div class="inline-actions wrap" style="margin-bottom:8px">
-      <label class="inline hint"><input type="checkbox" id="bl-free" ${assigned.length < 10 ? 'checked' : ''}> 把未分队选手（${free.length} 人，不含替补池）也加入分组</label>
+      <label class="inline hint"><input type="checkbox" id="bl-free" ${assigned.length < 10 ? 'checked' : ''}> 把未分队的参赛选手（${free.length} 人，不含替补池）也加入分组</label>
       <label class="inline hint"><input type="checkbox" id="bl-pos" checked> 尽量凑齐 1-5 号位</label>
       <span class="hint">当前已入队 ${assigned.length} 人</span>
     </div>
@@ -355,6 +355,24 @@ function openBalanceModal(t) {
 }
 const assignedPids = t => new Set(t.teams.flatMap(x => x.players).filter(Boolean));
 
+// ============ 参赛选手名单 ============
+/* t.roster = 本赛事的参赛选手 pid 列表；队伍和替补池都只能从这里挑人。
+   老数据没有该字段 → 用「已入队 + 替补池」回填一次，行为与改版前一致 */
+function rosterOf(t) {
+  if (!Array.isArray(t.roster)) t.roster = [...new Set([...assignedPids(t), ...(t.subs || [])])];
+  return t.roster;
+}
+const rosterSet = t => new Set(rosterOf(t));
+// 参赛选手对象列表（滤掉已从「选手名单」删掉的），按段位降序
+const rosterPlayers = t => { const set = rosterSet(t); return S().players.filter(p => set.has(p.id)).sort((x, y) => rankIdx(y) - rankIdx(x) || x.name.localeCompare(y.name, 'zh')); };
+// 参赛但还没进任何队伍的人（含替补池成员）
+const freePlayers = t => { const assigned = assignedPids(t); return rosterPlayers(t).filter(p => !assigned.has(p.id)); };
+// 把某人从所有队伍阵容和替补池里摘掉
+function removeFromSquad(t, pid) {
+  for (const x of t.teams) x.players = x.players.map(p => p === pid ? null : p);
+  t.subs = (t.subs || []).filter(x => x !== pid);
+}
+
 // ============ 渲染入口 ============
 const root = () => $('#tournament-root');
 function render() {
@@ -372,13 +390,14 @@ function viewList() {
       <form id="tn-create" class="inline-actions"><input type="text" id="tn-name" placeholder="赛事名称，如「夏季杯」" maxlength="40" required style="min-width:220px"><input type="date" id="tn-date" value="${today()}"><button class="primary">新建赛事</button></form></div>
     ${list.length ? `<div class="tn-list">${list.map(t => `<div class="tn-card" data-open="${t.id}">
         <div class="tn-card-head"><strong>${esc(t.name)}</strong><span class="chip-s ${t.status}">${statusTxt[t.status]}</span></div>
-        <div class="hint">${t.date || ''} · ${t.teams.length} 队 · ${t.stages.map(s => `${esc(s.name)}(${STAGE_TYPES[s.type]} BO${s.bo})`).join(' → ') || '未配置赛制'}</div>
+        <div class="hint">${t.date || ''} · 参赛 ${rosterPlayers(t).length} 人 · ${t.teams.length} 队 · ${t.stages.map(s => `${esc(s.name)}(${STAGE_TYPES[s.type]} BO${s.bo})`).join(' → ') || '未配置赛制'}</div>
         ${t.status === 'done' ? `<div class="tn-champ">🏆 冠军：${esc(tname(t, placements(t.stages[t.stages.length - 1], t)[0]))}</div>` : t.status === 'running' ? `<div class="hint">当前阶段：${esc(t.stages[t.currentStage]?.name || '')}</div>` : ''}
       </div>`).join('')}</div>` : '<p class="empty">还没有赛事。新建一个，然后分队、配置赛制、开始比赛。</p>'}
   </div>
   <details class="card"><summary>怎么用</summary>
     <ol class="hint" style="line-height:1.9;margin:0;padding-left:18px">
-      <li><b>分队</b>：每队固定 5 人，从选手名单里选；可「随机均衡分组」按段位 / 胜率 / KDA 综合实力随机分配并尽量凑齐号位，点「换一组」直到满意。没进队的选手可放进<b>公共替补池</b>，任何队临时缺人都能用。</li>
+      <li><b>参赛选手</b>：一场赛事通常只有部分人参加，先在「参赛选手」页从全部选手里挑出这次参赛的人。后面分队、替补池都只从这份名单里取；赛事开始后仍可加人（例如临时补替补），但已进队的人不能再移出。</li>
+      <li><b>分队</b>：每队固定 5 人，从参赛选手里选；可「随机均衡分组」按段位 / 胜率 / KDA 综合实力随机分配并尽量凑齐号位，点「换一组」直到满意。参赛但没进队的选手可放进<b>公共替补池</b>，任何队临时缺人都能用。</li>
       <li><b>赛制</b>：由多个阶段串起来，每阶段独立选 瑞士轮 / 单循环积分 / 分组循环 / 单败 / 双败，独立设 BO；小组类阶段同分可「添加加赛」；决赛可单独设 BO。默认模板：瑞士轮小组赛 → 八强 / 半决赛 / 决赛。</li>
       <li><b>记分</b>：点开一场系列赛，直接给某队 +1，或「录入本局」跳去记录比赛页（自动预填两队阵容，保存后回填比分），也可以关联已有记录。</li>
       <li>瑞士轮每轮打完后点「生成下一轮」；阶段全部打完后点「进入下一阶段」，按名次自动晋级并排种子。</li>
@@ -386,13 +405,14 @@ function viewList() {
 }
 
 function viewDetail(t) {
-  const subs = [['teams', '队伍与替补'], ['format', '赛制'], ...t.stages.map((s, i) => ['stage' + i, s.name]), ['board', '榜单']];
-  if (t.status === 'setup') subs.splice(2, t.stages.length);
+  const subs = [['roster', '参赛选手'], ['teams', '队伍与替补'], ['format', '赛制'], ...t.stages.map((s, i) => ['stage' + i, s.name]), ['board', '榜单']];
+  if (t.status === 'setup') subs.splice(3, t.stages.length);
   const active = subs.some(([k]) => k === tui.sub) ? tui.sub : 'teams';
   tui.sub = active;
   const statusTxt = { setup: '筹备中', running: '进行中', done: '已结束' };
   let body = '';
-  if (active === 'teams') body = viewTeams(t);
+  if (active === 'roster') body = viewRoster(t);
+  else if (active === 'teams') body = viewTeams(t);
   else if (active === 'format') body = viewFormat(t);
   else if (active === 'board') body = viewBoard(t);
   else body = viewStage(t, Number(active.slice(5)));
@@ -410,6 +430,35 @@ function viewDetail(t) {
   </div>`;
 }
 
+// ---- 参赛选手 ----
+function viewRoster(t) {
+  const P = playerMap();
+  const editable = t.status !== 'done';
+  const locked = t.status !== 'setup';            // 已开赛：只能加人，队内选手不能移出
+  const set = rosterSet(t);
+  const assigned = assignedPids(t);
+  const subSet = new Set(t.subs || []);
+  const all = [...S().players].sort((x, y) => rankIdx(y) - rankIdx(x) || x.name.localeCompare(y.name, 'zh'));
+  const tag = pid => assigned.has(pid) ? '<span class="pc" title="已进入某支队伍">已入队</span>' : subSet.has(pid) ? '<span class="pc" title="在公共替补池">替补</span>' : '';
+  const ghosts = rosterOf(t).filter(pid => !P.has(pid));
+  const q = (tui.rosterQ || '').trim().toLowerCase();
+  const keyOf = p => `${p.name} ${p.rank || ''}${p.stars || ''} ${(p.heroes || []).join(' ')}`.toLowerCase();
+  const chips = editable
+    ? (all.length ? all.map(p => { const k = keyOf(p); return `<div class="chip ${set.has(p.id) ? 'in-radiant' : ''}" data-roster="${p.id}" data-k="${esc(k)}"${q && !k.includes(q) ? ' style="display:none"' : ''}><span>${esc(p.name)}</span>${rankBadge(p)}${tag(p.id)}</div>`; }).join('')
+        : '<p class="empty" style="width:100%">「选手名单」里还没有选手，先去添加。</p>')
+    : (rosterPlayers(t).map(p => `<div class="chip"><span>${esc(p.name)}</span>${rankBadge(p)}${tag(p.id)}</div>`).join('') || '<span class="hint">无</span>');
+  return `<div class="tn-toolbar">
+      ${editable ? `<button type="button" id="tn-roster-all">全选（${all.length} 人）</button>
+      <button type="button" class="ghost danger" id="tn-roster-none">清空</button>
+      <input type="search" id="tn-roster-q" placeholder="搜索昵称 / 段位 / 英雄" value="${esc(tui.rosterQ || '')}">` : ''}
+      <span class="hint">参赛 ${set.size - ghosts.length} 人 · 已入队 ${assigned.size} 人 · 替补池 ${subSet.size} 人${locked ? ' · 赛事已开始，队内选手不能移出' : ''}</span>
+    </div>
+    <p class="hint">只有勾选为「参赛」的选手才会出现在下面「队伍与替补」的候选里。全部选手 ${all.length} 人，点头像卡片切换参赛状态。</p>
+    <div class="pool">${chips}</div>
+    ${ghosts.length ? `<p class="hint" style="margin-top:8px">名单里有 ${ghosts.length} 名选手已从「选手名单」删除，<button type="button" class="mini" id="tn-roster-clean">清理</button></p>` : ''}
+    ${editable && set.size - ghosts.length < 10 ? '<p class="hint" style="margin-top:8px">提示：一支队 5 人，至少 2 队才能开赛，建议先选够 10 人。</p>' : ''}`;
+}
+
 // ---- 队伍与替补 ----
 // 首阶段为分组循环时，按当前种子顺序预演分组（与开赛时 genGroups 同一规则）
 function previewGroups(t) {
@@ -425,7 +474,7 @@ function viewTeams(t) {
   const groupOf = id => { const gi = groups ? groups.findIndex(g => g.includes(id)) : -1; return gi >= 0 ? GN(gi) : ''; };
   const assigned = assignedPids(t);
   const subSet = new Set(t.subs || []);
-  const free = S().players.filter(p => !assigned.has(p.id)).sort((x, y) => rankIdx(y) - rankIdx(x) || x.name.localeCompare(y.name, 'zh'));
+  const free = freePlayers(t);
   const opt = (cur_, pid) => `<option value="${pid}" ${cur_ === pid ? 'selected' : ''}>${esc(P.get(pid)?.name ?? '(已删除)')}（${esc(P.get(pid)?.rank || '')}${P.get(pid)?.stars || ''}）</option>`;
   const teams = t.teams.map((tm, ti) => `<div class="tn-team">
     <div class="tn-team-head">
@@ -441,14 +490,15 @@ function viewTeams(t) {
   const subCount = new Map(); allSubs(t).forEach(x => subCount.set(x.in, (subCount.get(x.in) || 0) + 1));
   const cnt = pid => subCount.get(pid) ? `<span class="pc" title="替补出场局数">出场 ${subCount.get(pid)}</span>` : '';
   const subChips = editable || t.status !== 'done'
-    ? `<div class="pool">${free.length ? free.map(p => `<div class="chip ${subSet.has(p.id) ? 'in-radiant' : ''}" data-sub="${p.id}"><span>${esc(p.name)}</span>${rankBadge(p)}${cnt(p.id)}</div>`).join('') : '<p class="empty" style="width:100%">没有未分队的选手</p>'}</div>`
+    ? `<div class="pool">${free.length ? free.map(p => `<div class="chip ${subSet.has(p.id) ? 'in-radiant' : ''}" data-sub="${p.id}"><span>${esc(p.name)}</span>${rankBadge(p)}${cnt(p.id)}</div>`).join('') : '<p class="empty" style="width:100%">没有未进队的参赛选手（要加人先去「参赛选手」页勾选）</p>'}</div>`
     : `<div class="pool">${[...subSet].map(pid => `<div class="chip">${esc(pname(P, pid))}${cnt(pid)}</div>`).join('') || '<span class="hint">无</span>'}</div>`;
   return `<div class="tn-toolbar">
       ${editable ? `<button type="button" id="tn-add-team">＋ 添加队伍</button>
       <button type="button" class="primary" id="tn-balance" title="按段位 / 胜率 / KDA 综合实力随机分组，各队实力尽量均衡，并尽量凑齐 1-5 号位">随机均衡分组</button>
-      <button type="button" id="tn-fill" title="用未分队且不在替补池的选手，按段位蛇形填满空位">填满空位</button>
-      <span class="hint">共 ${t.teams.length} 队 · 已分配 ${assigned.size} 人 · 未分配 ${free.length} 人</span>` : `<span class="hint">赛事已开始，阵容锁定；替补池仍可调整。</span>`}
+      <button type="button" id="tn-fill" title="用未分队且不在替补池的参赛选手，按段位蛇形填满空位">填满空位</button>
+      <span class="hint">共 ${t.teams.length} 队 · 参赛 ${rosterPlayers(t).length} 人 · 已分配 ${assigned.size} 人 · 未分配 ${free.length} 人</span>` : `<span class="hint">赛事已开始，阵容锁定；替补池仍可调整。</span>`}
     </div>
+    ${editable && !rosterPlayers(t).length ? '<p class="tn-banner" style="display:block">还没有选参赛选手 —— 先去<button type="button" class="mini" data-sub-jump="roster">参赛选手</button>页从全部选手里挑人，这里才有候选。</p>' : ''}
     ${groups ? (() => { const byDraw = drawValid(t.stages[0], t.teams.map(x => x.id)); return `<div class="tn-banner" style="display:block"><b>分组预览</b>（第一阶段「${esc(t.stages[0].name)}」分 ${groups.length} 组，${byDraw ? '随机抽签结果' : '按种子号蛇形分：1→A、2→B、3→B、4→A…'}）
       <div class="tn-groups-preview">${groups.map((g, gi) => `<div><span class="tn-grp">${GN(gi)} 组</span> ${g.length ? g.map(id => esc(tname(t, id))).join('、') : '<span class="hint">空</span>'}</div>`).join('')}</div>
       ${editable ? `<div class="inline-actions wrap" style="margin-top:8px"><button type="button" id="tn-draw" title="所有队随机打乱后平均分到各组，不看实力，可反复抽">🎲 随机抽签分组</button>${byDraw ? '<button type="button" class="ghost" id="tn-draw-reset">恢复按种子分组</button>' : ''}<span class="hint">${byDraw ? '再抽一次会覆盖当前结果；增减队伍后抽签失效，需重抽。' : '不抽签则按种子顺序分，调队伍卡片 ↑↓ 可换组；改组数去「赛制」页。'}</span></div>` : ''}</div>`; })() : ''}
@@ -768,6 +818,7 @@ function presetSwissSE() { return [{ ...newStage('swiss'), name: '小组赛（�
 function presetRRDE() { return [{ ...newStage('rr'), name: '循环赛', bo: 1, advance: 4 }, { ...newStage('de'), name: '四强双败', bo: 3, finalBo: 5 }]; }
 
 function validateStart(t) {
+  if (!rosterPlayers(t).length) return '还没有挑参赛选手';
   if (t.teams.length < 2) return '至少要 2 支队伍';
   for (const tm of t.teams) if (tm.players.filter(Boolean).length !== 5) return `「${tm.name}」不满 5 人`;
   const all = t.teams.flatMap(x => x.players); if (new Set(all).size !== all.length) return '有选手同时在两支队伍里';
@@ -781,20 +832,48 @@ root().addEventListener('submit', e => {
   if (e.target.id !== 'tn-create') return;
   e.preventDefault();
   const name = $('#tn-name').value.trim(); if (!name) return;
-  const t = { id: uid(), name, date: $('#tn-date').value || today(), createdAt: Date.now(), status: 'setup', teams: [], subs: [], stages: presetSwissSE(), currentStage: -1 };
-  T().push(t); save(); tui.tid = t.id; tui.view = 'detail'; tui.sub = 'teams'; render(); toast('已创建赛事，先分队再配置赛制', 'ok');
+  const t = { id: uid(), name, date: $('#tn-date').value || today(), createdAt: Date.now(), status: 'setup', roster: [], teams: [], subs: [], stages: presetSwissSE(), currentStage: -1 };
+  T().push(t); save(); tui.tid = t.id; tui.view = 'detail'; tui.sub = 'roster'; render(); toast('已创建赛事，先挑参赛选手，再分队、配赛制', 'ok');
 });
 
 root().addEventListener('click', e => {
   const t = cur();
-  const card = e.target.closest('.tn-card[data-open]'); if (card) { tui.tid = card.dataset.open; tui.view = 'detail'; const tt = cur(); tui.sub = tt.status === 'setup' ? 'teams' : 'stage' + Math.max(0, tt.currentStage); tui.stageIdx = Math.max(0, tt.currentStage); render(); return; }
+  const card = e.target.closest('.tn-card[data-open]'); if (card) { tui.tid = card.dataset.open; tui.view = 'detail'; tui.rosterQ = ''; const tt = cur(); tui.sub = tt.status === 'setup' ? (rosterPlayers(tt).length ? 'teams' : 'roster') : 'stage' + Math.max(0, tt.currentStage); tui.stageIdx = Math.max(0, tt.currentStage); render(); return; }
   const sub = e.target.closest('.tn-subnav button[data-sub]'); if (sub) { tui.sub = sub.dataset.sub; if (tui.sub.startsWith('stage')) tui.stageIdx = Number(tui.sub.slice(5)); render(); return; }
+  const jump = e.target.closest('button[data-sub-jump]'); if (jump) { tui.sub = jump.dataset.subJump; render(); return; }
   const b = e.target.closest('button'); const id = b?.id;
   if (id === 'tn-back') { tui.view = 'list'; render(); return; }
   if (!t) return;
   if (id === 'tn-rename') { const v = prompt('赛事名称', t.name); if (v && v.trim()) { t.name = v.trim(); save(); render(); } return; }
   if (id === 'tn-delete') { if (confirm(`删除赛事「${t.name}」？已关联的比赛记录本身不会删除。`)) { S().tournaments = T().filter(x => x.id !== t.id); save(); tui.view = 'list'; render(); toast('已删除'); } return; }
   if (id === 'tn-start') { const err = validateStart(t); if (err) return toast(err, 'err'); t.status = 'running'; startStage(t, 0, t.teams.map(x => x.id)); save(); tui.sub = 'stage0'; render(); toast('赛事开始，第一阶段赛程已生成', 'ok'); return; }
+  // 参赛选手
+  if (id === 'tn-roster-all') {
+    if (t.status === 'done') return;
+    t.roster = S().players.map(p => p.id); save(); render(); toast(`已选中全部 ${t.roster.length} 人参赛`, 'ok'); return;
+  }
+  if (id === 'tn-roster-none') {
+    if (t.status !== 'setup') return toast('赛事已开始，不能清空参赛名单', 'err');
+    if ((assignedPids(t).size || (t.subs || []).length) && !confirm('清空参赛名单会同时清空所有队伍阵容和替补池。继续？')) return;
+    t.roster = []; t.teams.forEach(tm => tm.players = [null, null, null, null, null]); t.subs = [];
+    save(); render(); toast('已清空参赛名单'); return;
+  }
+  if (id === 'tn-roster-clean') {
+    const P = playerMap(); const before = rosterOf(t).length;
+    t.roster = rosterOf(t).filter(pid => P.has(pid));
+    save(); render(); toast(`已清理 ${before - t.roster.length} 名已删除选手`, 'ok'); return;
+  }
+  const rc = e.target.closest('.chip[data-roster]');
+  if (rc) {
+    if (t.status === 'done') return;
+    const pid = rc.dataset.roster, list = rosterOf(t), i = list.indexOf(pid);
+    if (i < 0) { list.push(pid); save(); render(); return; }
+    const inTeam = assignedPids(t).has(pid), inSub = (t.subs || []).includes(pid);
+    if (inTeam && t.status !== 'setup') return toast('赛事已开始，队内选手不能移出参赛名单', 'err');
+    if ((inTeam || inSub) && !confirm(`「${pname(playerMap(), pid)}」当前${inTeam ? '在队伍阵容里' : '在替补池里'}，移出参赛名单会一并把 TA 从${inTeam ? '阵容' : '替补池'}拿掉。继续？`)) return;
+    list.splice(i, 1); removeFromSquad(t, pid);
+    save(); render(); return;
+  }
   // 队伍
   if (id === 'tn-draw') {
     const st = t.stages[0]; if (!st || st.type !== 'groups') return;
@@ -806,12 +885,12 @@ root().addEventListener('click', e => {
   }
   if (id === 'tn-draw-reset') { const st = t.stages[0]; if (st) delete st.drawGroups; save(); render(); toast('已恢复按种子分组'); return; }
   if (id === 'tn-add-team') { t.teams.push({ id: uid(), name: `${t.teams.length + 1} 队`, players: [null, null, null, null, null] }); save(); render(); return; }
-  if (id === 'tn-balance') { if (S().players.length < 4) return toast('选手太少，先去「选手名单」添加', 'err'); openBalanceModal(t); return; }
+  if (id === 'tn-balance') { if (rosterPlayers(t).length < 4) return toast('参赛选手太少，先去「参赛选手」页挑人', 'err'); openBalanceModal(t); return; }
   if (id === 'tn-fill') {
     const assigned = assignedPids(t), subSet = new Set(t.subs || []);
-    const free = S().players.filter(p => !assigned.has(p.id) && !subSet.has(p.id)).sort((x, y) => rankIdx(y) - rankIdx(x));
+    const free = rosterPlayers(t).filter(p => !assigned.has(p.id) && !subSet.has(p.id));
     const empties = t.teams.flatMap(tm => tm.players.map((p, i) => p ? null : [tm, i]).filter(Boolean));
-    if (!empties.length) return toast('没有空位', 'err'); if (!free.length) return toast('没有可用的未分队选手', 'err');
+    if (!empties.length) return toast('没有空位', 'err'); if (!free.length) return toast('没有可用的未分队参赛选手', 'err');
     // 每次把段位最高的空闲选手给当前平均段位最低且还有空位的队
     const P = playerMap(); let k = 0;
     for (;;) { const cands = t.teams.filter(tm => tm.players.includes(null)); if (!cands.length || k >= free.length) break; cands.sort((x, y) => avgRank(x, P) - avgRank(y, P)); const tm = cands[0]; tm.players[tm.players.indexOf(null)] = free[k++].id; }
@@ -841,6 +920,13 @@ root().addEventListener('click', e => {
   if (id === 'tn-finish' && st) { if (!stageDone(st)) return toast('还有未打完的场次', 'err'); st.status = 'done'; t.status = 'done'; save(); tui.sub = 'board'; render(); toast('赛事已结束 🏆', 'ok'); return; }
   const sc = e.target.closest('.series.clickable[data-series]');
   if (sc) { openSeries(sc.dataset.series); }
+});
+
+root().addEventListener('input', e => {
+  if (e.target.id !== 'tn-roster-q') return;
+  tui.rosterQ = e.target.value;
+  const q = tui.rosterQ.trim().toLowerCase();
+  root().querySelectorAll('.chip[data-roster]').forEach(c => { c.style.display = q && !c.dataset.k.includes(q) ? 'none' : ''; });
 });
 
 root().addEventListener('change', e => {
