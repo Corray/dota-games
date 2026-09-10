@@ -405,13 +405,14 @@ function viewList() {
 }
 
 function viewDetail(t) {
-  const subs = [['roster', '参赛选手'], ['teams', '队伍与替补'], ['format', '赛制'], ...t.stages.map((s, i) => ['stage' + i, s.name]), ['board', '榜单']];
-  if (t.status === 'setup') subs.splice(3, t.stages.length);
+  const subs = [['roster', '参赛选手'], ['auction', '拍卖选马'], ['teams', '队伍与替补'], ['format', '赛制'], ...t.stages.map((s, i) => ['stage' + i, s.name]), ['board', '榜单']];
+  if (t.status === 'setup') subs.splice(4, t.stages.length);
   const active = subs.some(([k]) => k === tui.sub) ? tui.sub : 'teams';
   tui.sub = active;
   const statusTxt = { setup: '筹备中', running: '进行中', done: '已结束' };
   let body = '';
   if (active === 'roster') body = viewRoster(t);
+  else if (active === 'auction') body = window.DotaAuction ? window.DotaAuction.view(t) : '<p class="empty">拍卖模块未加载（auction.js）</p>';
   else if (active === 'teams') body = viewTeams(t);
   else if (active === 'format') body = viewFormat(t);
   else if (active === 'board') body = viewBoard(t);
@@ -940,6 +941,9 @@ root().addEventListener('change', e => {
     save(); render(); return; }
   if (el.matches('input[type=date][data-round]')) { const st = t.stages[tui.stageIdx]; const rd = st?.rounds.find(r => r.idx === Number(el.dataset.round)); if (rd) { rd.date = el.value; save(); } return; }
 });
+
+// 供 auction.js 复用的内部接口（拍卖选马是赛事的可选组队方式，独立子系统）
+window.DotaTournament = { cur, render, root, teamOf, tui, assignedPids, rosterOf, rosterPlayers, removeFromSquad };
 
 // 顶栏导入 / 示例数据 会整体替换 state，切回本 tab 时 render() 重新取 state，无需额外处理
 })();

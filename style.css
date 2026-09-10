@@ -320,3 +320,33 @@ tr.expanded td{background:var(--panel2)}
 .rp-bp-item.dire{border-color:var(--dire);color:var(--dire)}
 .rp-bp-item.ban{opacity:.55;text-decoration:line-through}
 .modal-box{position:relative}
+
+
+/* ============ 拍卖选马 ============ */
+.au-team{gap:2px}
+.au-money{font-size:12px;color:var(--muted,#9aa4b2);padding:2px 0}
+.au-money b{color:var(--fg,#e6e9ef)}
+.au-quotas{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0}
+.au-q{font-size:11px;padding:1px 7px;border-radius:999px;background:#232a38;border:1px solid #39414f;color:#9aa4b2;white-space:nowrap}
+.au-q.full{border-color:#8a6d1f;color:#e0b341}
+.au-q.bad{border-color:#8a2f2f;color:#ff6b6b;font-weight:600}
+.au-risk{font-size:11px;padding:1px 6px;border-radius:999px;margin-left:4px}
+.au-risk.warn{background:#4a3a10;color:#e0b341}
+.au-risk.bad{background:#4a1818;color:#ff8080}
+.au-cap{font-size:12px;color:#9aa4b2;padding:2px 0;display:flex;align-items:center;gap:6px}
+.au-row{display:flex;align-items:center;gap:6px;padding:3px 4px;border-radius:6px;background:rgba(255,255,255,.03)}
+.au-row .au-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-row .au-g{flex:0 0 auto;font-size:11px}
+.au-row .au-p{flex:0 0 auto;min-width:3.6em;text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.au-row .au-p i{font-style:normal;font-weight:400;font-size:10px;color:#9aa4b2;margin-left:1px}
+.au-add{align-self:flex-start;margin-top:4px}
+.au-t{display:inline-block;min-width:2.6em;text-align:center;font-size:11px;font-weight:700;padding:1px 5px;border-radius:4px;background:#2a3040;color:#9aa4b2}
+.au-t.tSSS{background:#5b2a6e;color:#f0c2ff}
+.au-t.tS{background:#7a2f2f;color:#ffc2c2}
+.au-t.tAp{background:#7a4a1f;color:#ffd9a8}
+.au-t.tA{background:#6b5f1f;color:#f2e9a8}
+.au-t.tAm{background:#3f5f2a;color:#d4f0b8}
+.au-t.tB{background:#25505c;color:#b8e6f0}
+.au-t.tC{background:#2f3f6b;color:#c2d0ff}
+.au-t.tD{background:#3a3f4a;color:#c7ccd6}
+tr.au-done{opacity:.55}
