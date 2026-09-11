@@ -118,6 +118,48 @@ function computeStats(matches) {
 }
 const topKey = (obj, by = 'g') => Object.entries(obj).sort((a, b) => b[1][by] - a[1][by])[0]?.[0];
 
+// ============ 选手综合评分 ============
+/* 四个维度各归一到 0-1 再按权重加权，输出 0-100。
+   段位是静态属性，其余三项来自战绩；场次低于「可信场次」的，战绩三项一律取中性值 0.5，
+   否则 1 场 1 胜就能刷到满分。tournament.js 的随机均衡分组共用这套口径 */
+const SCORE_KEY = 'dota-score-weights-v1';
+const SCORE_DEF = { wRank: 40, wWin: 30, wKda: 20, wHero: 10, trust: 3, heroMode: 'main', heroTop: 3, poolCap: 12 };
+/* 段位归一的分母。最高档「冠绝一世」不分星级（rankIdx 恒为 70），
+   写死 75 会让最高段永远只拿 93.3% 的段位分，所以按最高档的档位值取 */
+const RANK_MAX = (RANKS.length - 1) * 10;
+const KDA_CAP = 6;          // KDA 归一封顶，(k+a)/d ≥ 6 记满分
+function loadScoreOpt() {
+  try { return { ...SCORE_DEF, ...JSON.parse(localStorage.getItem(SCORE_KEY) || '{}') }; } catch { return { ...SCORE_DEF }; }
+}
+const saveScoreOpt = o => localStorage.setItem(SCORE_KEY, JSON.stringify(o));
+
+/* 英雄维度三种口径：
+   main 主力英雄战绩（场次最多的前 N 个英雄的加权胜率，衡量招牌英雄硬不硬）
+   pool 英雄池广度（打过多少个不同英雄，封顶归一，衡量好不好 ban / 能不能补位）
+   both 两者各半 */
+function heroScore(st, o) {
+  const hs = st ? Object.values(st.heroes || {}) : [];
+  if (!hs.length) return 0.5;
+  const pool = Math.min(hs.length / (o.poolCap || 12), 1);
+  if (o.heroMode === 'pool') return pool;
+  const top = [...hs].sort((a, b) => b.g - a.g).slice(0, o.heroTop || 3);
+  const g = top.reduce((s, x) => s + x.g, 0), w = top.reduce((s, x) => s + x.w, 0);
+  const main = g >= (o.trust || 1) ? w / g : 0.5;
+  return o.heroMode === 'both' ? (main + pool) / 2 : main;
+}
+function playerScore(st, p, opt) {
+  const o = { ...SCORE_DEF, ...opt };
+  const enough = st && st.g >= o.trust;
+  const rank = p ? Math.min(rankIdx(p), RANK_MAX) / RANK_MAX : 0.5;
+  const win = enough ? st.w / st.g : 0.5;
+  const kdaRaw = st && st.kdaG ? (st.k + st.a) / Math.max(st.d, 1) : null;
+  const kda = enough && kdaRaw != null ? Math.min(kdaRaw / KDA_CAP, 1) : 0.5;
+  const hero = enough ? heroScore(st, o) : 0.5;
+  const wsum = (o.wRank + o.wWin + o.wKda + o.wHero) || 1;
+  const raw = (o.wRank * rank + o.wWin * win + o.wKda * kda + o.wHero * hero) / wsum;
+  return { score: raw * 100, raw, rank, win, kda, kdaRaw, hero, enough, g: st?.g || 0 };
+}
+
 // ============ Tab 切换 ============
 function switchTab(tab) {
   ui.tab = tab;
@@ -593,18 +635,25 @@ let lastStatsRows = [];
     if (ui.statsSort.key === k) ui.statsSort.dir *= -1; else ui.statsSort = { key: k, dir: (k === 'name' || k === 'rank') ? 1 : -1 };
     renderStats();
   });
+  const swIds = { 'sw-rank': 'wRank', 'sw-win': 'wWin', 'sw-kda': 'wKda', 'sw-hero': 'wHero', 'sw-trust': 'trust', 'sw-mode': 'heroMode' };
+  Object.entries(swIds).forEach(([id, key]) => $('#' + id).addEventListener('input', e => {
+    const o = loadScoreOpt();
+    o[key] = key === 'heroMode' ? e.target.value : Math.max(key === 'trust' ? 1 : 0, Number(e.target.value) || 0);
+    saveScoreOpt(o); renderStats();
+  }));
+  $('#sw-reset').addEventListener('click', () => { saveScoreOpt({ ...SCORE_DEF }); renderStats(); toast('评分权重已重置'); });
   $('#stats-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#duo-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#duo-worst-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#hero-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#btn-copy-md').addEventListener('click', async () => {
-    const head = ['选手', '段位', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
+    const head = ['选手', '段位', '评分', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
     const md = ['| ' + head.join(' | ') + ' |', '|' + head.map(() => '---').join('|') + '|', ...lastStatsRows.map(r => '| ' + r.join(' | ') + ' |')].join('\n');
     try { await navigator.clipboard.writeText(md); toast('已复制 Markdown 表格', 'ok'); }
     catch { showModal(`<h2>复制 Markdown</h2><p class="hint">浏览器不允许自动复制，请手动全选复制：</p><textarea rows="14" style="width:100%">${esc(md)}</textarea>`); }
   });
   $('#btn-csv').addEventListener('click', () => {
-    const head = ['选手', '段位', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
+    const head = ['选手', '段位', '评分', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
     const csv = '\uFEFF' + [head, ...lastStatsRows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
@@ -618,11 +667,23 @@ function filteredMatches() {
   return state.matches.filter(m => (!from || m.date >= from) && (!to || m.date <= to));
 }
 
+// 评分列的悬停明细：拆出四项各自贡献了多少分
+const scoreTip = sc => {
+  const o = loadScoreOpt(), wsum = (o.wRank + o.wWin + o.wKda + o.wHero) || 1;
+  const part = (label, w, v) => `${label} ${(v * 100).toFixed(0)}分 ×${w} → ${(w * v / wsum * 100).toFixed(1)}`;
+  return [part('段位', o.wRank, sc.rank), part('胜率', o.wWin, sc.win), part('KDA', o.wKda, sc.kda), part('英雄', o.wHero, sc.hero),
+    sc.enough ? '' : `* 不足 ${o.trust} 场，战绩三项按中性 0.5 计`].filter(Boolean).join('\n');
+};
+
 function renderStats() {
   const P = playerMap();
   const ms = filteredMatches();
   const st = computeStats(ms);
   const minG = Math.max(1, Number($('#sf-min').value) || 1);
+  const so = loadScoreOpt();
+  $('#sw-rank').value = so.wRank; $('#sw-win').value = so.wWin; $('#sw-kda').value = so.wKda; $('#sw-hero').value = so.wHero;
+  $('#sw-mode').value = so.heroMode; $('#sw-trust').value = so.trust;
+  $('#sw-sum').textContent = `权重和 ${so.wRank + so.wWin + so.wKda + so.wHero}（按比例归一，不必凑 100）`;
 
   // 概览
   const rows = Object.values(st.players).filter(s => s.g >= minG && P.has(s.pid));
@@ -644,8 +705,9 @@ function renderStats() {
     return { pid: s.pid, name: p.name, rank: rankIdx(p), rankHtml: rankBadge(p), g: s.g, w: s.w, l: s.g - s.w, wr: pctNum(s.w, s.g), rwr: pctNum(s.rw, s.rg), dwr: pctNum(s.dw, s.dg),
       rg: s.rg, rw: s.rw, dg: s.dg, dw: s.dw, streak: s.streak, kda: s.kdaG ? (s.k + s.a) / Math.max(1, s.d) : -1, kdaStr: s.kdaG ? `${(s.k / s.kdaG).toFixed(1)}/${(s.d / s.kdaG).toFixed(1)}/${(s.a / s.kdaG).toFixed(1)}` : '',
       pos: Object.entries(s.pos).sort((a, b) => b[1].g - a[1].g).slice(0, 2).map(([k, v]) => `${POS_SHORT[k]} ${v.g}场`).join('，'),
-      hero: Object.entries(s.heroes).sort((a, b) => b[1].g - a[1].g).slice(0, 3).map(([k, v]) => `${k} ${v.w}/${v.g}`).join('，') };
-  });
+      hero: Object.entries(s.heroes).sort((a, b) => b[1].g - a[1].g).slice(0, 3).map(([k, v]) => `${k} ${v.w}/${v.g}`).join('，'),
+      sc: playerScore(s, p, so) };
+  }).map(r => ({ ...r, score: r.sc.score }));
   const { key, dir } = ui.statsSort;
   data.sort((a, b) => {
     const va = a[key], vb = b[key];
@@ -657,6 +719,7 @@ function renderStats() {
   $('#stats-table tbody').innerHTML = data.length ? data.map(r => `<tr>
     <td><button class="name-btn" data-pid="${r.pid}">${esc(r.name)}</button></td>
     <td>${r.rankHtml}</td>
+    <td class="num" title="${scoreTip(r.sc)}"><strong class="sc-v">${r.score.toFixed(1)}</strong><span class="bar sc-bar" style="width:${Math.round(r.sc.raw * 40)}px"></span>${r.sc.enough ? '' : '<span class="hint sc-thin">*</span>'}</td>
     <td class="num">${r.g}</td><td class="num win">${r.w}</td><td class="num loss">${r.l}</td>
     <td class="num"><strong>${pct(r.w, r.g)}</strong><span class="bar" style="width:${Math.round(r.wr * 40)}px"></span></td>
     <td class="num">${r.rg ? `${pct(r.rw, r.rg)} <span class="hint">(${r.rg})</span>` : '-'}</td>
@@ -666,7 +729,7 @@ function renderStats() {
     <td class="wrap">${esc(r.hero) || '-'}</td>
     <td class="num">${streakHtml(r.streak)}</td>
   </tr>`).join('') : `<tr><td colspan="12" class="empty">没有符合条件的数据</td></tr>`;
-  lastStatsRows = data.map(r => [r.name, `${P.get(r.pid).rank}${P.get(r.pid).stars || ''}`, r.g, r.w, r.l, pct(r.w, r.g), r.rg ? `${pct(r.rw, r.rg)}(${r.rg})` : '-', r.dg ? `${pct(r.dw, r.dg)}(${r.dg})` : '-', r.kda >= 0 ? `${r.kda.toFixed(2)} (${r.kdaStr})` : '-', r.pos || '-', r.hero || '-', r.streak > 0 ? `${r.streak}连胜` : r.streak < 0 ? `${-r.streak}连败` : '-']);
+  lastStatsRows = data.map(r => [r.name, `${P.get(r.pid).rank}${P.get(r.pid).stars || ''}`, r.score.toFixed(1), r.g, r.w, r.l, pct(r.w, r.g), r.rg ? `${pct(r.rw, r.rg)}(${r.rg})` : '-', r.dg ? `${pct(r.dw, r.dg)}(${r.dg})` : '-', r.kda >= 0 ? `${r.kda.toFixed(2)} (${r.kdaStr})` : '-', r.pos || '-', r.hero || '-', r.streak > 0 ? `${r.streak}连胜` : r.streak < 0 ? `${-r.streak}连败` : '-']);
 
   // 英雄
   const heroes = Object.values(st.heroes).sort((a, b) => b.g - a.g || pctNum(b.w, b.g) - pctNum(a.w, a.g));
@@ -1185,6 +1248,7 @@ window.DotaApp = {
   get state() { return state; }, get ui() { return ui; },
   save, hooks, renderAll, switchTab, prefillMatch, startEditMatch, computeStats,
   $, $$, esc, uid, today, toast, showModal, hideModal, playerMap, pname, rankBadge, rankIdx, RANKS, POS_SHORT,
+  playerScore, loadScoreOpt, saveScoreOpt, SCORE_DEF,
 };
 
 // ============ 启动 ============

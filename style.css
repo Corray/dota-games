@@ -385,3 +385,13 @@ button.mini.au-go:hover{filter:brightness(1.08)}
 input.au-nnum{width:3.4em;padding:4px 2px;text-align:center;-moz-appearance:textfield}
 input.au-nnum.wide{width:4.4em}
 .au-nnum::-webkit-outer-spin-button,.au-nnum::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+
+/* ---- 选手评分 ---- */
+.score-cfg{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 0 10px;border-bottom:1px solid var(--border);margin-bottom:8px}
+.score-cfg .field-label{margin:0;white-space:nowrap}
+.score-cfg label.inline{gap:4px;white-space:nowrap}
+.score-cfg input[type=number]{width:3.6em;padding:4px 6px;text-align:center}
+.score-cfg select{width:auto;padding:4px 6px;font-size:12px}
+.sc-v{font-variant-numeric:tabular-nums}
+.sc-bar{background:var(--accent)}
+.sc-thin{margin-left:2px}

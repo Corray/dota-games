@@ -247,20 +247,16 @@ function advancing(st, t) {
 }
 
 // ============ 队伍分配 ============
-/* 综合实力分：段位 + 胜率 + KDA 按权重加权（各项归一到 0-1）。场次不足的选手，胜率 / KDA 取中性值 0.5 */
+/* 综合实力分 —— 直接用 app.js 的选手评分引擎（统计页「评分」列同一套口径），
+   避免两处各写一套算法、以后调权重逻辑打架。这里额外附带位置信息给号位覆盖惩罚用 */
 function strengthScores(pids, opt) {
   const P = playerMap();
   const stats = A.computeStats(S().matches).players;
-  const wsum = (opt.wRank + opt.wWin + opt.wKda) || 1;
+  const o = { wRank: opt.wRank, wWin: opt.wWin, wKda: opt.wKda, wHero: opt.wHero || 0, trust: opt.minGames, heroMode: opt.heroMode || 'main' };
   return new Map(pids.map(pid => {
-    const p = P.get(pid), st = stats[pid];
-    const rank = p ? Math.min(rankIdx(p), 75) / 75 : 0.5;
-    const enough = st && st.g >= opt.minGames;
-    const win = enough ? st.w / st.g : 0.5;
-    const kdaRaw = st && st.kdaG ? (st.k + st.a) / Math.max(st.d, 1) : null;
-    const kda = enough && kdaRaw != null ? Math.min(kdaRaw / 6, 1) : 0.5;
-    const score = (opt.wRank * rank + opt.wWin * win + opt.wKda * kda) / wsum;
-    return [pid, { score, rank, win, kda, kdaRaw, g: st?.g || 0, positions: p?.positions || [] }];
+    const p = P.get(pid);
+    const r = A.playerScore(stats[pid], p, o);
+    return [pid, { ...r, positions: p?.positions || [] }];
   }));
 }
 /* 随机均衡分组：多次「加随机扰动后蛇形分配」，取各队总分最均衡（可选：位置覆盖最好）的一组 */
@@ -299,7 +295,7 @@ function openBalanceModal(t) {
   const subSet = new Set(t.subs || []);
   const free = rosterPlayers(t).filter(p => !assigned.includes(p.id) && !subSet.has(p.id)).map(p => p.id);
   const readOpt = () => ({
-    wRank: Number($('#bl-w-rank').value) || 0, wWin: Number($('#bl-w-win').value) || 0, wKda: Number($('#bl-w-kda').value) || 0,
+    wRank: Number($('#bl-w-rank').value) || 0, wWin: Number($('#bl-w-win').value) || 0, wKda: Number($('#bl-w-kda').value) || 0, wHero: Number($('#bl-w-hero').value) || 0,
     minGames: Number($('#bl-min').value) || 1, positions: $('#bl-pos').checked, includeFree: $('#bl-free').checked, k: Math.max(2, Number($('#bl-k').value) || 2),
   });
   let result = null;
@@ -323,6 +319,7 @@ function openBalanceModal(t) {
       <label class="narrow">段位权重<input type="number" id="bl-w-rank" min="0" max="100" value="50"></label>
       <label class="narrow">胜率权重<input type="number" id="bl-w-win" min="0" max="100" value="30"></label>
       <label class="narrow">KDA 权重<input type="number" id="bl-w-kda" min="0" max="100" value="20"></label>
+      <label class="narrow" title="主力英雄战绩，与统计页「评分」同一口径；默认 0 表示不计入">英雄权重<input type="number" id="bl-w-hero" min="0" max="100" value="0"></label>
       <label class="narrow" title="场次少于此数的选手，胜率 / KDA 按中性值算">最少场次<input type="number" id="bl-min" min="1" max="50" value="3"></label>
     </div>
     <div class="inline-actions wrap" style="margin-bottom:8px">

@@ -205,12 +205,30 @@
   </div>
 
   <div class="card">
-    <h3>选手排行 <span class="hint">点击表头排序，点击昵称看详情</span></h3>
+    <div class="card-head">
+      <h3>选手排行 <span class="hint">点击表头排序，点击昵称看详情</span></h3>
+    </div>
+    <div class="score-cfg">
+      <span class="field-label">评分权重</span>
+      <label class="inline">段位<input id="sw-rank" type="number" min="0" max="100"></label>
+      <label class="inline">胜率<input id="sw-win" type="number" min="0" max="100"></label>
+      <label class="inline">KDA<input id="sw-kda" type="number" min="0" max="100"></label>
+      <label class="inline">英雄<input id="sw-hero" type="number" min="0" max="100"></label>
+      <select id="sw-mode" title="「常用英雄」这一项怎么算">
+        <option value="main">主力英雄战绩</option>
+        <option value="pool">英雄池广度</option>
+        <option value="both">两者各半</option>
+      </select>
+      <label class="inline" title="场次低于此数的选手，胜率 / KDA / 英雄分一律按中性值 0.5 计，避免 1 场 1 胜刷满分">可信场次<input id="sw-trust" type="number" min="1" max="99"></label>
+      <button type="button" class="ghost" id="sw-reset">重置默认</button>
+      <span class="hint" id="sw-sum"></span>
+    </div>
     <div class="table-wrap">
       <table class="tbl sortable" id="stats-table">
         <thead><tr>
           <th data-key="name">选手</th>
           <th data-key="rank">段位</th>
+          <th data-key="score" class="num" title="段位 / 胜率 / KDA / 常用英雄 四项按权重加权，0-100">评分</th>
           <th data-key="g" class="num">场次</th>
           <th data-key="w" class="num">胜</th>
           <th data-key="l" class="num">负</th>
