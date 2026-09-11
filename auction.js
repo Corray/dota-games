@@ -267,6 +267,122 @@ function defaultDeal(t, dealId) {
   return { fine, count: a.penalties.filter(x => x.teamId === d.teamId).length };
 }
 
+// ============ 性价比阵容推荐 ============
+/* 给某队在「剩余预算 + 剩余名额」下，从未成交选手里凑一套阵容。
+   这是带约束的组合优化：预算保底(五.1) + 人数(五.2) + 号位覆盖(五.3) + 级别配额(五.4) + 45组(五.5)。
+   91 选 5 有 4400 万种组合，暴力不可行 —— 用「随机重启贪心 + 局部改进」，
+   跟随机均衡分组同一套路数：先按目标键排序，加扰动重复多次，再对最优解做单点替换直到收敛。 */
+const PRICE_MODES = { base: '起拍底价（乐观）', fair: '建议均衡价（现实）', max: '出价上限（悲观）' };
+const GOALS = { score: '总实力最强', value: '性价比最高', save: '省钱保守' };
+const SAVE_RATIO = 0.7;          // 「省钱保守」只花剩余预算的七成，给后面的轮次留余量
+const estPrice = (g, mode) => TIER[g] ? (TIER[g][mode] ?? TIER[g].fair) : 0;
+
+// 候选池：参赛名单里已定级、还没成交的人，附评分 / 预估价 / 性价比
+function candidates(t, priceMode, stats, so) {
+  return TN.rosterPlayers(t).filter(p => gradeOf(t, p.id) && !dealOf(t, p.id)).map(p => {
+    const g = gradeOf(t, p.id), price = estPrice(g, priceMode);
+    const score = A.playerScore(stats[p.id], p, so).score;
+    return { pid: p.id, p, g, cls: TIER[g]?.cls || '', grp: posGroup(p), price, score, value: score / Math.max(price, 1) };
+  });
+}
+
+function recommendSquad(t, tmId, opt) {
+  const a = auc(t), st = teamStat(t, tmId);
+  if (st.slots <= 0) return { ok: false, msg: '该队已满编，没有空位可推荐' };
+  if (st.banned) return { ok: false, msg: '该队已两次违约，按六.3 取消出价权' };
+  const fixed = st.deals.map(d => d.pid), need = st.slots;
+  const cands = opt.cands;
+  if (cands.length < need) return { ok: false, msg: `未成交选手只剩 ${cands.length} 人，凑不满 ${need} 个空位` };
+
+  const roomS = QUOTA.S - st.sCnt, roomA = QUOTA.A - st.aCnt, room45 = MAX45 - st.c45;
+  const cap = opt.goal === 'save' ? st.left * SAVE_RATIO : st.left;
+  const key = opt.goal === 'value' ? 'value' : 'score';
+  // 号位排不齐不违规（可以有人降位打），但要压低优先级
+  const fit = (total, cost, soft) => (opt.goal === 'value' ? total / Math.max(cost, 1) : total) * (soft ? 1 : 0.9);
+
+  /* 按号位挑人，而不是按性价比一路扫。
+     五.3 要求 5 人覆盖 1-5 各一个 —— 纯性价比贪心会选出一堆同号位的人（实测三套方案全是
+     「123组·1」重复三次），阵容再便宜也没法用。所以先给已买的人定位，再为每个空号位挑人。 */
+  const P2 = playerMap();
+  const posOf = pid => { const ps = P2.get(pid)?.positions || []; return ps.length ? [...ps] : [1, 2, 3, 4, 5]; };
+  // 45 组只能占 4/5（五.5 单向锁定）；123 组可自愿降打 4/5，不违规
+  const canPlay = (c, pos) => c.grp === '45' ? pos >= 4 : true;
+  const isGood = (c, pos) => (c.p.positions || []).includes(pos);      // 本来就擅长这个位
+
+  // 给已买的人分配号位，返回还空着的号位；顺序随机化，让不同重启探索到不同分配
+  const fixedOpen = () => {
+    const idx = fixed.map((pid, i) => i).sort(() => Math.random() - 0.5);
+    const used = new Set();
+    const dfs = k => {
+      if (k === idx.length) return true;
+      const opts = [...posOf(fixed[idx[k]])].sort(() => Math.random() - 0.5);
+      for (const pos of opts) if (!used.has(pos)) { used.add(pos); if (dfs(k + 1)) return true; used.delete(pos); }
+      return false;
+    };
+    if (!dfs(0)) return null;                                          // 已买的人自己就排不开
+    return [1, 2, 3, 4, 5].filter(x => !used.has(x));
+  };
+
+  const build = order => {
+    const open = fixedOpen();
+    if (!open || open.length !== need) return null;
+    const slots = [...open].sort(() => Math.random() - 0.5);           // 先挑哪个号位也随机
+    const pick = [], taken = new Set();
+    let cost = 0, uS = 0, uA = 0, u45 = 0;
+    for (let i = 0; i < slots.length; i++) {
+      const pos = slots[i], slotsAfter = need - pick.length - 1;
+      const ok = c => !taken.has(c.pid)
+        && !(c.cls === 'S' && uS >= roomS) && !(c.cls === 'A' && uA >= roomA) && !(c.grp === '45' && u45 >= room45)
+        && cost + c.price <= cap && st.left - cost - c.price >= slotsAfter * a.minPrice;   // 五.1 保底
+      // 优先擅长该号位的人；实在没有再让 123 组降位顶上
+      const c = order.find(x => ok(x) && canPlay(x, pos) && isGood(x, pos)) || order.find(x => ok(x) && canPlay(x, pos));
+      if (!c) return null;
+      pick.push({ ...c, pos }); taken.add(c.pid); cost += c.price;
+      if (c.cls === 'S') uS++; else if (c.cls === 'A') uA++;
+      if (c.grp === '45') u45++;
+    }
+    return { pick, cost };
+  };
+  const evaluate = r => {
+    const lc = lineupCheck(t, [...fixed, ...r.pick.map(x => x.pid)]);
+    if (!lc.hard) return null;
+    const total = r.pick.reduce((s, x) => s + x.score, 0);
+    return { ...r, total, lc, fit: fit(total, r.cost, lc.soft) };
+  };
+
+  let best = null;
+  for (let n = 0; n < 400; n++) {
+    const j = n === 0 ? 0 : 0.35;                                            // 第 0 次不扰动 = 纯贪心基线
+    const order = [...cands].sort((x, y) => y[key] * (1 + (Math.random() - .5) * j) - x[key] * (1 + (Math.random() - .5) * j));
+    const built = build(order);
+    const r = built && evaluate(built);
+    if (r && (!best || r.fit > best.fit)) best = r;
+  }
+  if (!best) return { ok: false, msg: '在预算和硬约束下凑不出可行阵容 —— 试试放宽价格口径，或先流拍几个高价位' };
+
+  // 局部改进：逐个位置试着换成候选里的其他人，能变好就换，直到不再改进
+  for (let round = 0; round < 12; round++) {
+    let improved = false;
+    for (let i = 0; i < best.pick.length; i++) {
+      const pos = best.pick[i].pos;
+      for (const c of cands) {
+        if (best.pick.some(x => x.pid === c.pid)) continue;
+        if (pos && !canPlay(c, pos)) continue;                         // 换人不能破坏号位覆盖
+        const pick = best.pick.map((x, k) => k === i ? { ...c, pos } : x);
+        const cost = pick.reduce((s, x) => s + x.price, 0);
+        if (cost > cap) continue;
+        if (st.left - cost < 0) continue;
+        const uS = pick.filter(x => x.cls === 'S').length, uA = pick.filter(x => x.cls === 'A').length, u45 = pick.filter(x => x.grp === '45').length;
+        if (uS > roomS || uA > roomA || u45 > room45) continue;
+        const r = evaluate({ pick, cost });
+        if (r && r.fit > best.fit + 1e-9) { best = r; improved = true; }
+      }
+    }
+    if (!improved) break;
+  }
+  return { ok: true, ...best, st, fixed, need, cap };
+}
+
 // ============ 视图 ============
 function view(t) {
   if (!enabled(t)) return `<div class="tn-banner" style="display:block">
@@ -284,6 +400,7 @@ function view(t) {
     <label class="narrow" title="保底约束用：剩余预算须 ≥ 剩余名额 × 该值">最低身价<input type="number" id="au-min" min="1" max="999" value="${a.minPrice}" ${editable ? '' : 'disabled'}></label>
     ${editable ? `<button type="button" class="primary" id="au-import">导入定级表</button>
     <button type="button" id="au-mkteams" title="按规则一次性建满队伍并命名">生成队伍</button>
+    <button type="button" id="au-rec">性价比阵容推荐</button>
     <button type="button" class="ghost danger" id="au-reset">清空成交</button>` : '<span class="hint">赛事已开始，拍卖账目锁定</span>'}
     <span class="hint">选手池 ${pool.length} 人（已定级 ${graded.length}）· 已成交 ${dealt} 人 · 总成交额 ${fmt(total)} 万 / ${fmt(a.budget * t.teams.length)} 万</span>
   </div>`;
@@ -311,7 +428,7 @@ function view(t) {
       <div class="au-cap">队长：${capPid ? `${esc(pname(P, capPid))}` : '<span class="hint">未定</span>'}
         ${editable ? `<button type="button" class="mini" data-au-cap="${tm.id}">设置</button>` : ''}</div>
       ${rows || '<div class="hint" style="padding:4px 2px">还没买人</div>'}
-      ${editable && st.slots > 0 ? `<button type="button" class="mini au-add" data-au-buy="${tm.id}">＋ 录入成交</button>` : ''}
+      ${editable && st.slots > 0 ? `<div class="au-team-acts"><button type="button" class="mini au-add" data-au-buy="${tm.id}">＋ 录入成交</button><button type="button" class="mini" data-au-rec="${tm.id}" title="在剩余预算和硬约束下推荐一套阵容">荐阵容</button></div>` : ''}
     </div>`;
   }).join('')}</div>` : '<p class="empty">还没有队伍，点上面「生成队伍」。</p>';
 
@@ -494,6 +611,63 @@ function viewStage(t) {
   return `<div class="card au-stage"><h3 style="margin:0 0 8px">🔨 正在拍卖</h3>${head}${panel}</div>`;
 }
 
+// ============ 弹窗：性价比阵容推荐 ============
+const recUI = { priceMode: 'fair', tmId: null, exclude: new Set() };
+function openRecommend(t, tmId) {
+  recUI.tmId = tmId || recUI.tmId || t.teams.find(x => teamStat(t, x.id).slots > 0)?.id || t.teams[0]?.id;
+  if (!recUI.tmId) return toast('还没有队伍', 'err');
+  const render = () => {
+    const tmId2 = recUI.tmId, st = teamStat(t, tmId2), tm = TN.teamOf(t, tmId2);
+    const stats = A.computeStats(S().matches).players, so = A.loadScoreOpt();
+    let cands = candidates(t, recUI.priceMode, stats, so).filter(c => !recUI.exclude.has(c.pid));
+    if (cands.length < st.slots + 2) { recUI.exclude.clear(); cands = candidates(t, recUI.priceMode, stats, so); }
+    const plans = Object.keys(GOALS).map(goal => ({ goal, r: recommendSquad(t, tmId2, { goal, priceMode: recUI.priceMode, cands }) }));
+
+    const planCard = ({ goal, r }) => {
+      if (!r.ok) return `<div class="au-plan"><div class="au-plan-h"><b>${GOALS[goal]}</b></div><p class="empty">${esc(r.msg)}</p></div>`;
+      const rows = [...r.pick].sort((x, y) => (x.pos || 9) - (y.pos || 9)).map(c => `<tr>
+        <td><span class="au-t t${c.g.replace('+', 'p').replace('-', 'm')}">${esc(c.g)}</span></td>
+        <td><b class="au-pos">${c.pos || '?'}</b> ${esc(c.p.name)}<span class="hint"> ${esc(groupTxt(c.grp))}${(c.p.positions || []).length ? '·' + c.p.positions.join('/') : ''}${c.pos && !(c.p.positions || []).includes(c.pos) ? ' <i>降位</i>' : ''}</span></td>
+        <td class="num">${fmt(c.price)}</td><td class="num">${c.score.toFixed(1)}</td><td class="num"><b>${c.value.toFixed(2)}</b></td></tr>`).join('');
+      const leftAfter = st.left - r.cost;
+      return `<div class="au-plan">
+        <div class="au-plan-h"><b>${GOALS[goal]}</b>
+          <span class="hint">合计 <b>${fmt(r.cost)}</b> 万 · 余 ${fmt(leftAfter)} · 总分 <b>${r.total.toFixed(0)}</b> · 每万分 ${(r.total / Math.max(r.cost, 1)).toFixed(2)}</span></div>
+        <table class="tbl"><thead><tr><th>档</th><th>号位·选手</th><th class="num" title="预估成交价">价</th><th class="num">评分</th><th class="num" title="评分 ÷ 预估价">性价</th></tr></thead><tbody>${rows}</tbody></table>
+        ${r.lc.soft ? '<p class="hint">✓ 连同已买的人，按擅长位置能排出 1-5</p>' : '<p class="hint">⚠ 号位排不齐，需有人自愿降位打（123 组降打 4/5 不违规）</p>'}
+        ${goal === 'save' ? `<p class="hint">只花了剩余预算的 ${Math.round(SAVE_RATIO * 100)}%，给后面几轮留余量</p>` : ''}
+      </div>`;
+    };
+
+    showModal(`<h2>性价比阵容推荐 <span class="hint">在剩余预算和五条硬约束下凑阵容</span></h2>
+      <div class="row wrap" style="margin-top:8px;align-items:flex-end">
+        <label class="grow">队伍<select id="rc-team">${t.teams.map(x => { const s2 = teamStat(t, x.id); return `<option value="${x.id}" ${x.id === tmId2 ? 'selected' : ''}>${esc(x.name)}（剩 ${fmt(s2.left)} 万 / ${s2.slots} 名额）</option>`; }).join('')}</select></label>
+        <label class="grow">预估成交价按<select id="rc-price">${Object.entries(PRICE_MODES).map(([k, v]) => `<option value="${k}" ${k === recUI.priceMode ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+        <button type="button" id="rc-again" title="算法会收敛到同一个最优解，所以换一批 = 避开当前首选里的 1-2 人重算">🎲 换一批</button>
+        ${recUI.exclude.size ? `<button type="button" class="ghost" id="rc-clear">已避开 ${recUI.exclude.size} 人，恢复</button>` : ''}
+      </div>
+      <p class="hint">「${esc(tm?.name || '')}」剩 <b>${fmt(st.left)}</b> 万 / <b>${st.slots}</b> 个名额 ·
+        余量：S级 ${QUOTA.S - st.sCnt} / A系 ${QUOTA.A - st.aCnt} / 45组 ${MAX45 - st.c45} ·
+        候选 ${cands.length} 人。价格是<b>预估</b>，实际以竞价结果为准；性价比 = 评分 ÷ 预估价。</p>
+      <div class="au-plans">${plans.map(planCard).join('')}</div>
+      <div class="form-actions" style="justify-content:flex-end"><button type="button" class="ghost" id="rc-close">关闭</button></div>`);
+    $('#rc-close').onclick = hideModal;
+    $('#rc-again').onclick = () => {
+      const first = plans.find(x => x.r.ok)?.r;
+      if (first) {
+        const pool = first.pick.map(x => x.pid);
+        const n = Math.min(pool.length, 1 + Math.floor(Math.random() * 2));
+        for (let i = 0; i < n; i++) recUI.exclude.add(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+      }
+      render();
+    };
+    if ($('#rc-clear')) $('#rc-clear').onclick = () => { recUI.exclude.clear(); render(); };
+    $('#rc-team').onchange = e => { recUI.tmId = e.target.value; recUI.exclude.clear(); render(); };
+    $('#rc-price').onchange = e => { recUI.priceMode = e.target.value; recUI.exclude.clear(); render(); };
+  };
+  render();
+}
+
 // ============ 弹窗：录入成交 ============
 function openBuy(t, presetPid, presetTeam) {
   const P = playerMap(), a = auc(t);
@@ -640,6 +814,8 @@ document.addEventListener('click', e => {
   }
   if (!enabled(t)) return;
   if (id === 'au-import') { openImport(t); return; }
+  if (id === 'au-rec') { openRecommend(t, null); return; }
+  if (b.dataset.auRec) { openRecommend(t, b.dataset.auRec); return; }
   if (id === 'au-buy' || b.dataset.auBuy) { openBuy(t, null, b.dataset.auBuy); return; }
   if (b.dataset.auBuyP) { openBuy(t, b.dataset.auBuyP, null); return; }
   if (b.dataset.auCap) { openCaptain(t, b.dataset.auCap); return; }
@@ -767,5 +943,5 @@ setInterval(() => {
   el.classList.toggle('warn', left > 0 && left <= 10000);
 }, 250);
 
-window.DotaAuction = { view, TIER, TIERS, checkBid, teamStat, posGroup, autoLots, drawOrder, openLot, checkOpenBid, sealedRank, passLive, defaultDeal, lotsOf };
+window.DotaAuction = { view, TIER, TIERS, checkBid, teamStat, posGroup, autoLots, drawOrder, openLot, checkOpenBid, sealedRank, passLive, defaultDeal, lotsOf, recommendSquad, candidates, estPrice, PRICE_MODES, GOALS };
 })();

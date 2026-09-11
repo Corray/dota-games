@@ -395,3 +395,16 @@ input.au-nnum.wide{width:4.4em}
 .sc-v{font-variant-numeric:tabular-nums}
 .sc-bar{background:var(--accent)}
 .sc-thin{margin-left:2px}
+
+/* ---- 性价比阵容推荐 ---- */
+.au-team-acts{display:flex;gap:4px;margin-top:4px}
+.au-plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px;margin-top:10px}
+.au-plan{border:1px solid var(--border);border-radius:10px;padding:10px;background:rgba(255,255,255,.02)}
+.au-plan-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;margin-bottom:6px}
+.au-plan-h b{font-size:14px;color:var(--accent)}
+.au-plan .tbl{font-size:12px}
+.au-plan .tbl{table-layout:auto;width:100%}
+.au-plan .tbl td,.au-plan .tbl th{padding:3px 4px;white-space:nowrap}
+.au-plan .tbl td:nth-child(2){max-width:11em;overflow:hidden;text-overflow:ellipsis}
+.au-pos{display:inline-block;min-width:1.4em;text-align:center;font-size:11px;border-radius:3px;background:#2f3f6b;color:#c2d0ff}
+.au-plan .hint i{font-style:normal;color:#e0b341}
