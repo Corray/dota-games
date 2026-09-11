@@ -30,8 +30,16 @@ const DEFAULT_PROXY = 'https://dota-match-proxy.corray.workers.dev'; // Cloudfla
 const PROXY_KEY = 'dota-proxy-url';
 const getProxy = () => (localStorage.getItem(PROXY_KEY) ?? DEFAULT_PROXY).trim().replace(/\/+$/, '');
 
+// ============ 只读分享模式 ============
+/* ?share=xxx.json 打开时进入只读快照模式：数据从该 JSON 拉取而不是 localStorage，
+   只留「统计」页签，所有写操作停掉。这样分享页和自己看到的是同一份渲染代码，
+   统计口径不会出现两套。 */
+const SHARE_URL = new URLSearchParams(location.search).get('share');
+const READONLY = !!SHARE_URL;
+let shareMeta = null;
+
 // ============ 状态 ============
-let state = load();
+let state = READONLY ? { players: [], matches: [], tournaments: [] } : load();
 const ui = {
   tab: 'players',
   editingPlayer: null,
@@ -78,7 +86,7 @@ function load() {
   } catch (e) { console.warn('读取本地数据失败', e); }
   return { players: [], matches: [], tournaments: [] };
 }
-function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function save() { if (READONLY) return; localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 
 // ============ 统计计算 ============
 function computeStats(matches) {
@@ -1193,6 +1201,38 @@ $('#btn-proxy-cfg').addEventListener('click', configProxy);
 $('#m-id').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); fetchOpenDota(); } });
 
 // ============ 导入 / 导出 / 示例 ============
+/* 发布统计快照：生成给别人看的脱敏 JSON。
+   剥掉 accountId（Steam ID 能反查账号，选手没同意公开）、note、以及全部赛事 / 拍卖数据。
+   剥字段必须在生成时做 —— 只在前端不显示，打开 DevTools 照样看得到。 */
+function buildSnapshot() {
+  const players = state.players.map(p => ({ id: p.id, name: p.name, rank: p.rank, stars: p.stars, positions: p.positions, heroes: p.heroes }));
+  const matches = state.matches.map(m => ({
+    id: m.id, date: m.date, winner: m.winner, duration: m.duration, createdAt: m.createdAt,
+    radiant: (m.radiant || []).map(x => ({ pid: x.pid, hero: x.hero, pos: x.pos, kda: x.kda })),
+    dire: (m.dire || []).map(x => ({ pid: x.pid, hero: x.hero, pos: x.pos, kda: x.kda })),
+  }));
+  return { meta: { publishedAt: new Date().toISOString(), players: players.length, matches: matches.length }, players, matches };
+}
+$('#btn-publish')?.addEventListener('click', () => {
+  const snap = buildSnapshot();
+  const json = JSON.stringify(snap);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  a.download = 'stats.json';
+  a.click(); URL.revokeObjectURL(a.href);
+  const link = `${location.origin}${location.pathname}?share=stats.json`;
+  showModal(`<h2>统计快照已生成</h2>
+    <p class="hint">已剥掉 Steam ID、备注和全部赛事 / 拍卖数据，只保留统计需要的字段。
+      ${snap.players.length} 名选手 · ${snap.matches.length} 场比赛 · ${(json.length / 1024).toFixed(0)} KB（服务端 gzip 后约 ${(json.length / 1024 / 7).toFixed(0)} KB）。</p>
+    <ol class="hint" style="line-height:1.9">
+      <li>把刚下载的 <code>stats.json</code> 放到项目根目录</li>
+      <li><code>git add stats.json &amp;&amp; git commit -m "更新统计快照" &amp;&amp; git push</code></li>
+      <li>等 GitHub Pages 构建完（约 1 分钟），把下面的链接发出去</li>
+    </ol>
+    <input type="text" readonly value="${esc(link)}" style="width:100%" onclick="this.select()">
+    <p class="hint">别人打开这个链接只能看统计，改不了任何数据，也不会影响他自己的本地记录。</p>`);
+});
+
 $('#btn-export').addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }));
@@ -1252,5 +1292,32 @@ window.DotaApp = {
 };
 
 // ============ 启动 ============
+function applyReadonlyChrome() {
+  document.body.classList.add('readonly');
+  $$('.tab').forEach(b => { if (b.dataset.tab !== 'stats') b.remove(); });
+  $('.topbar-actions')?.remove();
+  switchTab('stats');
+}
 renderAll();
+if (READONLY) {
+  applyReadonlyChrome();
+  fetch(SHARE_URL, { cache: 'no-cache' })
+    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+    .then(d => {
+      state = { players: d.players || [], matches: d.matches || [], tournaments: [] };
+      shareMeta = d.meta || null;
+      const when = shareMeta?.publishedAt ? new Date(shareMeta.publishedAt).toLocaleString('zh-CN') : '';
+      const bar = document.createElement('div');
+      bar.className = 'share-bar';
+      bar.innerHTML = `📊 战绩统计只读快照${when ? ` · 数据截止 ${esc(when)}` : ''} · ${state.players.length} 名选手 / ${state.matches.length} 场比赛`;
+      document.querySelector('main').prepend(bar);
+      renderAll();
+    })
+    .catch(e => {
+      const bar = document.createElement('div');
+      bar.className = 'share-bar err';
+      bar.textContent = `加载快照失败：${e.message}（${SHARE_URL}）`;
+      document.querySelector('main').prepend(bar);
+    });
+}
 })();

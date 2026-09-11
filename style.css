@@ -408,3 +408,8 @@ input.au-nnum.wide{width:4.4em}
 .au-plan .tbl td:nth-child(2){max-width:11em;overflow:hidden;text-overflow:ellipsis}
 .au-pos{display:inline-block;min-width:1.4em;text-align:center;font-size:11px;border-radius:3px;background:#2f3f6b;color:#c2d0ff}
 .au-plan .hint i{font-style:normal;color:#e0b341}
+
+/* ---- 只读分享快照 ---- */
+.share-bar{margin:0 0 14px;padding:9px 14px;border-radius:10px;background:#1d2735;border:1px solid #2f4055;color:#b8c2d0;font-size:13px}
+.share-bar.err{background:#3a1c1c;border-color:#6b2b2b;color:#ffb3b3}
+body.readonly .tabs{pointer-events:none}
