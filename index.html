@@ -15,6 +15,7 @@
     <button class="tab" data-tab="matches">比赛列表</button>
     <button class="tab" data-tab="stats">统计</button>
     <button class="tab" data-tab="tournament">正式比赛</button>
+    <button class="tab" data-tab="bp">BP 助手</button>
   </nav>
   <div class="topbar-actions">
     <button id="btn-export" class="ghost" title="把全部选手与比赛导出为 JSON 文件备份">导出备份</button>
@@ -283,6 +284,11 @@
   <div id="tournament-root"></div>
 </section>
 
+<!-- ============ BP 助手 ============ -->
+<section id="tab-bp" class="panel">
+  <div id="bp-root"></div>
+</section>
+
 </main>
 
 <datalist id="hero-list"></datalist>
@@ -296,5 +302,6 @@
 <script src="app.js"></script>
 <script src="tournament.js"></script>
 <script src="auction.js"></script>
+<script src="bp.js"></script>
 </body>
 </html>

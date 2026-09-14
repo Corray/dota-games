@@ -1536,7 +1536,7 @@ function demoData() {
 window.DotaApp = {
   get state() { return state; }, get ui() { return ui; },
   save, hooks, renderAll, switchTab, prefillMatch, startEditMatch, computeStats,
-  $, $$, esc, uid, today, toast, showModal, hideModal, playerMap, pname, rankBadge, rankIdx, RANKS, POS_SHORT,
+  $, $$, esc, uid, today, toast, showModal, hideModal, playerMap, pname, rankBadge, rankIdx, RANKS, POS_SHORT, POS_NAME, HERO_BY_ID, HEROES,
   playerScore, loadScoreOpt, saveScoreOpt, SCORE_DEF,
 };
 

@@ -1,0 +1,286 @@
+/* BP 助手 —— 选人 / 禁人建议 + 英雄克制查询
+   数据：bp-data.json（STRATZ 英雄两两对位 / 同队胜率，由 Sino-Huang/DOTA-2-ban-pick-tool 整理，MIT），千分制整数
+   算法：移植自该项目 heuristic.py —— 我方优势 = mean(克制分, 配合分)
+     克制分 = 对每个我方英雄，取它对每个敌方英雄的 counter × 1.2 × 号位权重 + 0.5 的平均，再对我方取平均
+     配合分 = 我方两两 with 胜率的平均
+   草稿存 localStorage（dota-bp-v1），不进 state，不进备份 */
+(() => {
+'use strict';
+const A = window.DotaApp;
+if (!A) { console.error('bp.js 必须在 app.js 之后加载'); return; }
+const { $, $$, esc, toast, HERO_BY_ID, POS_SHORT, POS_NAME, rankBadge } = A;
+const S = () => A.state;
+
+const KEY = 'dota-bp-v1';
+const COUNTER_WEIGHT = 1.2;
+// TEMP[我方号位][敌方号位]：3 号位更看重克制对方 1 号位，5 号位更看重克制对方 3 号位……（原项目 config.py）
+const TEMP = [[1.1, .8, 1.2, .8, .8], [.8, 1.2, .8, .8, .8], [1.3, 1.0, .8, .8, .8], [1.2, 1.2, .8, .8, .8], [.8, .8, 1.4, .8, .8]];
+const SUGGEST_N = 8;
+
+let D = null, loading = null;      // 数据 + 索引
+let idx = new Map();               // heroId → 矩阵下标
+const bp = load();
+function load() {
+  try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && d.ally && d.enemy) return d; } catch {}
+  return { ally: Array.from({ length: 5 }, () => ({ hero: null, pid: null })), enemy: Array.from({ length: 5 }, () => ({ hero: null, pid: null })), bans: [], mode: 'enemy', q: '', focus: null };
+}
+const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(bp)); } catch {} };
+
+// ============ 数据 ============
+function ensureData() {
+  if (D) return Promise.resolve(D);
+  if (!loading) loading = fetch('bp-data.json', { cache: 'force-cache' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(d => { D = d; idx = new Map(d.heroes.map((id, i) => [id, i])); return d; })
+    .catch(e => { loading = null; throw e; });
+  return loading;
+}
+const has = id => idx.has(id);
+const M = (name, a, b) => { const i = idx.get(a), j = idx.get(b); return i == null || j == null ? 0 : D[name][i][j] / 1000; };
+const lanes = id => { const i = idx.get(id); return i == null ? [0, 0, 0, 0, 0] : D.lanes[i].map(x => x / 1000); };
+const hname = id => HERO_BY_ID[id] || `英雄#${id}`;
+const pct = x => (x * 100).toFixed(1) + '%';
+const spct = x => (x >= 0 ? '+' : '') + (x * 100).toFixed(1) + '%';
+
+// ============ 打分 ============
+function heuristic(ally, enemy) {
+  const es = enemy.map((h, j) => [h, j]).filter(([h]) => h);
+  let vs = 0.5;
+  if (es.length) {
+    const per = [];
+    ally.forEach((a, i) => { if (!a) return; per.push(es.reduce((s, [e, j]) => s + M('counter', a, e) * COUNTER_WEIGHT * TEMP[i][j] + 0.5, 0) / es.length); });
+    if (per.length) vs = per.reduce((s, x) => s + x, 0) / per.length;
+  }
+  const as = ally.filter(Boolean);
+  let wt = 0.5, n = 0, sum = 0;
+  for (let i = 0; i < as.length; i++) for (let j = i + 1; j < as.length; j++) { sum += M('with', as[i], as[j]); n++; }
+  if (n) wt = sum / n;
+  return { h: (vs + wt) / 2, vs, wt };
+}
+const allyIds = () => bp.ally.map(s => s.hero);
+const enemyIds = () => bp.enemy.map(s => s.hero);
+const usedSet = () => new Set([...allyIds(), ...enemyIds(), ...bp.bans].filter(Boolean));
+
+// 某一侧某号位的候选池：绑定了选手用选手的擅长英雄（并入默认池但标记），否则用默认池
+function candidates(side, pos) {
+  const slot = bp[side][pos];
+  const P = A.playerMap(); const p = slot.pid ? P.get(slot.pid) : null;
+  const mine = new Set((p?.heroes || []).map(n => Object.keys(HERO_BY_ID).find(k => HERO_BY_ID[k] === n)).filter(Boolean).map(Number));
+  const base = new Set([...D.pools[pos], ...mine]);
+  if (bp.wide) D.heroes.forEach(id => { if (lanes(id)[pos] >= 0.05) base.add(id); });
+  const used = usedSet();
+  return [...base].filter(id => has(id) && !used.has(id)).map(id => ({ id, mine: mine.has(id) }));
+}
+
+// 我方各空位推荐：把候选放进该位后的整体优势
+function suggestPicks() {
+  const ally = allyIds(), enemy = enemyIds();
+  const base = heuristic(ally, enemy);
+  const out = [];
+  bp.ally.forEach((s, pos) => {
+    if (s.hero) return;
+    const rows = candidates('ally', pos).map(c => { const a = [...ally]; a[pos] = c.id; const r = heuristic(a, enemy); return { ...c, ...r, d: r.h - base.h }; })
+      .sort((x, y) => y.h - x.h);
+    out.push({ pos, rows, worst: [...rows].reverse().slice(0, 3) });
+  });
+  return { base, out };
+}
+// 禁用建议：敌方各空位放入候选后，对我方优势伤害最大的
+function strength(id) { const i = idx.get(id); const row = D.versus[i]; let s = 0, n = 0; row.forEach((v, j) => { if (j !== i && v) { s += v; n++; } }); return n ? s / n / 1000 : 0.5; }
+function suggestBans() {
+  const ally = allyIds(), enemy = enemyIds();
+  if (!ally.some(Boolean)) {   // 没有我方英雄时克制分恒为 0.5，改按版本强势度排
+    const best = new Map();
+    bp.enemy.forEach((s, pos) => { if (s.hero) return; for (const c of candidates('enemy', pos)) { const cur = best.get(c.id); const st = strength(c.id); if (!cur || lanes(c.id)[pos] > lanes(c.id)[cur.pos]) best.set(c.id, { id: c.id, h: st, d: st - 0.5, pos, mine: c.mine || cur?.mine, byStrength: true }); } });
+    return [...best.values()].sort((x, y) => (Number(!!y.mine) - Number(!!x.mine)) || (y.h - x.h)).slice(0, 10);   // 对方选手擅长的永远排前面
+  }
+  const base = heuristic(ally, enemy).h;
+  const best = new Map();
+  bp.enemy.forEach((s, pos) => {
+    if (s.hero) return;
+    for (const c of candidates('enemy', pos)) {
+      const e = [...enemy]; e[pos] = c.id; const h = heuristic(ally, e).h;
+      const cur = best.get(c.id); if (!cur || h < cur.h) best.set(c.id, { id: c.id, h, d: h - base, pos, mine: c.mine || cur?.mine });
+    }
+  });
+  return [...best.values()].sort((x, y) => (Number(!!y.mine) - Number(!!x.mine)) || (x.h - y.h)).slice(0, 10);   // 对方选手擅长的永远排前面
+}
+// 英雄查询：它克制的 / 克制它的 / 配合好的
+function heroInfo(id) {
+  const others = D.heroes.filter(h => h !== id);
+  const by = (name, dir) => [...others].sort((a, b) => dir * (M(name, id, b) - M(name, id, a))).slice(0, 8).map(h => ({ id: h, v: M(name, id, h) }));
+  return { good: by('versus', 1), bad: by('versus', -1), with: by('with', 1), lanes: lanes(id) };
+}
+// 自动分配号位：把这一侧所有自动放入（未手动换位）的英雄一起重排，取出场率总和最大的排列；手动定过位置的槽固定不动
+function autoAssign(side) {
+  const arr = bp[side];
+  const free = arr.map((s, i) => (!s.hero || s.auto) ? i : -1).filter(i => i >= 0);
+  const heroes = free.map(i => arr[i].hero).filter(Boolean);
+  if (heroes.length < 2) return;
+  let best = null, bv = -1;
+  const perm = (rest, acc) => {
+    if (acc.length === heroes.length) { const v = acc.reduce((s, pos, k) => s + lanes(heroes[k])[pos], 0); if (v > bv) { bv = v; best = [...acc]; } return; }
+    rest.forEach((pos, k) => perm(rest.filter((_, j) => j !== k), [...acc, pos]));
+  };
+  perm(free, []);
+  free.forEach(i => { arr[i].hero = null; arr[i].auto = false; });
+  best.forEach((pos, k) => { arr[pos].hero = heroes[k]; arr[pos].auto = true; });
+}
+// 放英雄：挑空位里该英雄出场率最高的号位
+function bestEmptyPos(side, id) {
+  const l = lanes(id); let best = -1, bv = -1;
+  bp[side].forEach((s, i) => { if (!s.hero && l[i] > bv) { bv = l[i]; best = i; } });
+  return best;
+}
+
+// ============ 操作 ============
+function placeHero(id, side, pos) {
+  removeHero(id);
+  if (side === 'ban') { bp.bans.push(id); return; }
+  const auto = pos == null;
+  if (auto) pos = bestEmptyPos(side, id);
+  if (pos < 0) return toast(side === 'ally' ? '我方已满 5 人' : '敌方已满 5 人', 'err');
+  bp[side][pos].hero = id; bp[side][pos].auto = auto;
+  if (auto) autoAssign(side);
+}
+function removeHero(id) {
+  for (const side of ['ally', 'enemy']) bp[side].forEach(s => { if (s.hero === id) s.hero = null; });
+  bp.bans = bp.bans.filter(x => x !== id);
+}
+function whereIs(id) {
+  if (bp.ally.some(s => s.hero === id)) return 'ally';
+  if (bp.enemy.some(s => s.hero === id)) return 'enemy';
+  if (bp.bans.includes(id)) return 'ban';
+  return null;
+}
+function onHeroClick(id) {
+  if (bp.mode === 'view') { bp.focus = id; persist(); render(); return; }
+  if (!has(id)) return toast('这个英雄还没有对位数据', 'err');
+  if (whereIs(id)) removeHero(id); else placeHero(id, bp.mode, null);
+  persist(); render();
+}
+
+// ============ 渲染 ============
+function render() {
+  const root = $('#bp-root'); if (!root) return;
+  if (!D) {
+    root.innerHTML = '<div class="card"><p class="empty">正在加载英雄对位数据…</p></div>';
+    ensureData().then(render).catch(e => { root.innerHTML = `<div class="card"><p class="empty">加载 bp-data.json 失败：${esc(e.message)}</p></div>`; });
+    return;
+  }
+  const P = A.playerMap();
+  const players = [...S().players].sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+  const ev = heuristic(allyIds(), enemyIds());
+  const anyAlly = allyIds().some(Boolean), anyEnemy = enemyIds().some(Boolean);
+
+  const slotHtml = (side, s, i) => {
+    const p = s.pid ? P.get(s.pid) : null;
+    const l = s.hero ? lanes(s.hero) : null;
+    return `<div class="bp-slot ${s.hero ? 'filled' : ''}" data-side="${side}" data-pos="${i}">
+      <span class="pos-chip" title="${POS_NAME[i + 1]}">${POS_SHORT[i + 1]}</span>
+      <span class="bp-slot-hero">${s.hero ? esc(hname(s.hero)) : '<span class="hint">空位</span>'}${l ? `<span class="hint" title="该英雄在此号位的出场率（STRATZ）"> ${Math.round(l[i] * 100)}%</span>` : ''}</span>
+      ${s.hero ? `<select data-act="move" title="换到别的号位">${[0, 1, 2, 3, 4].map(k => `<option value="${k}" ${k === i ? 'selected' : ''}>${POS_SHORT[k + 1]}</option>`).join('')}</select>` : ''}
+      <select data-act="pid" title="绑定名单里的选手：推荐 / 禁用会优先用他的擅长英雄"><option value="">选手…</option>${players.map(x => `<option value="${x.id}" ${x.id === s.pid ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+      ${s.hero ? `<button type="button" class="slot-remove" data-act="rm" title="移出">×</button>` : ''}
+      ${p && p.heroes.length ? `<div class="bp-slot-pool hint">${p.heroes.map(h => { const id = Number(Object.keys(HERO_BY_ID).find(k => HERO_BY_ID[k] === h)); const w = id ? whereIs(id) : null; return `<button type="button" class="mini ${w ? 'used' : ''}" data-act="quick" data-hero="${id || ''}" ${!id || !has(id) ? 'disabled' : ''} title="${w ? '已在阵容 / 禁用里' : '放到这个位置'}">${esc(h)}</button>`; }).join('')}</div>` : ''}
+    </div>`;
+  };
+  const modeBtn = (m, label, cls) => `<button type="button" class="bp-mode ${cls || ''} ${bp.mode === m ? 'on' : ''}" data-mode="${m}">${label}</button>`;
+
+  // 推荐区
+  let right = '';
+  if (bp.mode === 'view' || bp.focus) {
+    const f = bp.focus;
+    if (f && has(f)) {
+      const info = heroInfo(f);
+      const list = (rows, fmt) => `<div class="bp-list">${rows.map(r => `<button type="button" class="bp-cand" data-act="focus" data-hero="${r.id}"><span>${esc(hname(r.id))}</span><b>${fmt(r.v)}</b></button>`).join('')}</div>`;
+      right += `<div class="card"><div class="card-head"><h3>英雄查询：${esc(hname(f))}</h3><span class="hint">常见号位 ${info.lanes.map((v, i) => `${POS_SHORT[i + 1]} ${Math.round(v * 100)}%`).join(' · ')}</span></div>
+        <div class="bp-grid3">
+          <div><h4>它克制的 <span class="hint">对位胜率</span></h4>${list(info.good, pct)}</div>
+          <div><h4>克制它的 <span class="hint">对位胜率</span></h4>${list(info.bad, pct)}</div>
+          <div><h4>配合好的 <span class="hint">同队胜率</span></h4>${list(info.with, pct)}</div>
+        </div>
+        <div class="form-actions" style="margin-top:8px"><button type="button" class="mini" data-act="place" data-side="ally" data-hero="${f}">放入我方</button><button type="button" class="mini" data-act="place" data-side="enemy" data-hero="${f}">放入敌方</button><button type="button" class="mini" data-act="place" data-side="ban" data-hero="${f}">禁用</button><button type="button" class="mini" data-act="unfocus">关闭</button></div></div>`;
+    } else if (bp.mode === 'view') right += '<div class="card"><p class="empty">「查询」模式下点任意英雄，看它克制谁、被谁克制、和谁配合好。</p></div>';
+  }
+  if (!anyAlly && !anyEnemy) {
+    right += '<div class="card"><p class="empty">先把敌方已选的英雄放进去（默认「敌方」模式，点下方英雄即可），这里会按我方每个号位给出推荐和禁用建议。也可以先放我方英雄，看配合。</p></div>';
+  } else {
+    const { out } = suggestPicks();
+    const bans = suggestBans(); const byStr = !!bans[0]?.byStrength;
+    right += `<div class="card"><div class="card-head"><h3>我方推荐 <span class="hint">数字是放入后我方整体优势，50% 为均势</span></h3><div class="inline-actions">${anyAlly && anyEnemy ? `<span class="bp-eval">当前 <b>${pct(ev.h)}</b> <span class="hint">克制 ${pct(ev.vs)} · 配合 ${pct(ev.wt)}</span></span>` : ''}<label class="inline hint" title="默认只从该号位的常用英雄池里挑；勾上后所有在该号位出场率 ≥ 5% 的英雄都参与"><input type="checkbox" id="bp-wide" ${bp.wide ? 'checked' : ''}> 全英雄候选</label></div></div>
+      ${out.length ? out.map(({ pos, rows, worst }) => `<div class="bp-pos-block"><h4>${POS_NAME[pos + 1]}${bp.ally[pos].pid ? ` <span class="hint">${esc(P.get(bp.ally[pos].pid)?.name || '')} 的英雄池 ★</span>` : ''}</h4>
+        <div class="bp-list">${rows.slice(0, SUGGEST_N).map(r => `<button type="button" class="bp-cand ${r.mine ? 'mine' : ''}" data-act="pick" data-pos="${pos}" data-hero="${r.id}" title="克制 ${pct(r.vs)} · 配合 ${pct(r.wt)}${r.mine ? ' · 选手擅长' : ''}">${r.mine ? '★ ' : ''}<span>${esc(hname(r.id))}</span><b>${pct(r.h)}</b><i class="${r.d >= 0 ? 'up' : 'down'}">${spct(r.d)}</i></button>`).join('') || '<span class="hint">没有可选英雄</span>'}</div>
+        ${worst.length ? `<div class="hint bp-avoid">避坑：${worst.map(r => `${esc(hname(r.id))} ${pct(r.h)}`).join('、')}</div>` : ''}</div>`).join('') : '<p class="hint">我方 5 个位置都已选满</p>'}
+    </div>
+    <div class="card"><div class="card-head"><h3>禁用建议 <span class="hint">${byStr ? '我方还没选人，先按版本强势度（平均对位胜率）排' : '敌方空位放入后对我方伤害最大的'}</span></h3></div>
+      ${bans.length ? `<div class="bp-list">${bans.map(r => `<button type="button" class="bp-cand ban ${r.mine ? 'mine' : ''}" data-act="ban" data-hero="${r.id}" title="${byStr ? `平均对位胜率 ${pct(r.h)}` : `敌方 ${POS_SHORT[r.pos + 1]} 选它后我方优势 ${pct(r.h)}`}${r.mine ? ' · 对方选手擅长' : ''}">${r.mine ? '★ ' : ''}<span>${esc(hname(r.id))}</span><span class="pos-chip">${POS_SHORT[r.pos + 1]}</span><i class="${byStr ? 'up' : 'down'}">${byStr ? pct(r.h) : spct(r.d)}</i></button>`).join('')}</div>
+      <p class="hint">★ = 敌方绑定选手的擅长英雄，永远排在最前；内战里对手会玩什么比版本数据更重要。</p>` : '<p class="hint">敌方已满或没有候选</p>'}
+    </div>`;
+  }
+
+  // 英雄网格
+  const q = bp.q.trim().toLowerCase();
+  const heroes = Object.entries(HERO_BY_ID).map(([id, n]) => [Number(id), n]).filter(([, n]) => !q || n.toLowerCase().includes(q)).sort((a, b) => a[1].localeCompare(b[1], 'zh'));
+  const grid = heroes.map(([id, n]) => { const w = whereIs(id); return `<button type="button" class="bp-hero ${w || ''} ${has(id) ? '' : 'nodata'} ${bp.focus === id ? 'focus' : ''}" data-act="hero" data-hero="${id}" title="${has(id) ? (w === 'ally' ? '我方 · 点击移出' : w === 'enemy' ? '敌方 · 点击移出' : w === 'ban' ? '已禁用 · 点击撤销' : '') : '无对位数据'}">${esc(n)}</button>`; }).join('');
+
+  root.innerHTML = `<div class="bp-layout">
+    <div class="bp-left">
+      <div class="card">
+        <div class="card-head"><h2>阵容</h2><div class="inline-actions"><button type="button" class="ghost" data-act="swap" title="我方 / 敌方互换">交换</button><button type="button" class="ghost" data-act="reset">清空</button></div></div>
+        <div class="bp-modes"><span class="hint">点英雄放入：</span>${modeBtn('ally', '我方', 'ally')}${modeBtn('enemy', '敌方', 'enemy')}${modeBtn('ban', '禁用', 'ban')}${modeBtn('view', '查询', '')}</div>
+        <div class="bp-side ally"><div class="bp-side-head">我方</div>${bp.ally.map((s, i) => slotHtml('ally', s, i)).join('')}</div>
+        <div class="bp-side enemy"><div class="bp-side-head">敌方 <span class="hint">位置按出场率猜，可手动改</span></div>${bp.enemy.map((s, i) => slotHtml('enemy', s, i)).join('')}</div>
+        <div class="bp-bans"><span class="hint">已禁用：</span>${bp.bans.length ? bp.bans.map(id => `<button type="button" class="mini" data-act="hero" data-hero="${id}" title="点击撤销">${esc(hname(id))} ×</button>`).join('') : '<span class="hint">无</span>'}</div>
+      </div>
+    </div>
+    <div class="bp-right">${right}</div>
+  </div>
+  <div class="card">
+    <div class="card-head"><h3>英雄 <span class="hint">当前模式：${{ ally: '放入我方', enemy: '放入敌方', ban: '禁用', view: '查询' }[bp.mode]}</span></h3><input type="search" id="bp-q" placeholder="搜索英雄" value="${esc(bp.q)}"></div>
+    <div class="bp-heroes">${grid}</div>
+    <p class="hint" style="margin-top:10px">数据：${esc(D.source)}，截止 ${esc(D.updated)}。对位 / 同队胜率来自天梯传奇到冠绝分段，内战里仅作参考。</p>
+  </div>`;
+  const qi = $('#bp-q'); if (qi && document.activeElement !== qi && bp._qFocus) { qi.focus(); qi.setSelectionRange(qi.value.length, qi.value.length); }
+}
+
+// ============ 事件 ============
+(function init() {
+  const root = $('#bp-root'); if (!root) return;
+  root.addEventListener('click', e => {
+    const mb = e.target.closest('.bp-mode'); if (mb) { bp.mode = mb.dataset.mode; if (bp.mode !== 'view') bp.focus = null; persist(); render(); return; }
+    const b = e.target.closest('button[data-act]'); if (!b) return;
+    const act = b.dataset.act; const id = Number(b.dataset.hero) || null;
+    if (act === 'hero') onHeroClick(id);
+    else if (act === 'pick') { placeHero(id, 'ally', Number(b.dataset.pos)); }
+    else if (act === 'ban') { placeHero(id, 'ban'); }
+    else if (act === 'place') { if (b.dataset.side === 'ban') placeHero(id, 'ban'); else placeHero(id, b.dataset.side, null); bp.focus = null; if (bp.mode === 'view') bp.mode = 'enemy'; }
+    else if (act === 'focus') { bp.focus = id; }
+    else if (act === 'unfocus') { bp.focus = null; if (bp.mode === 'view') bp.mode = 'enemy'; }
+    else if (act === 'quick') { const slot = b.closest('.bp-slot'); placeHero(id, slot.dataset.side, Number(slot.dataset.pos)); }
+    else if (act === 'rm') { const slot = b.closest('.bp-slot'); bp[slot.dataset.side][Number(slot.dataset.pos)].hero = null; }
+    else if (act === 'swap') { [bp.ally, bp.enemy] = [bp.enemy, bp.ally]; }
+    else if (act === 'reset') { if (!confirm('清空我方 / 敌方 / 禁用？（选手绑定保留）')) return; bp.ally.forEach(s => s.hero = null); bp.enemy.forEach(s => s.hero = null); bp.bans = []; bp.focus = null; }
+    else return;
+    persist(); render();
+  });
+  root.addEventListener('change', e => {
+    const el = e.target;
+    if (el.id === 'bp-wide') { bp.wide = el.checked; persist(); render(); return; }
+    const slot = el.closest('.bp-slot'); if (!slot) return;
+    const side = slot.dataset.side, pos = Number(slot.dataset.pos);
+    if (el.dataset.act === 'pid') {
+      const pid = el.value || null;
+      if (pid) bp[side].forEach((s, i) => { if (i !== pos && s.pid === pid) s.pid = null; });   // 一个选手只能在一个位置
+      bp[side][pos].pid = pid;
+    } else if (el.dataset.act === 'move') {
+      const to = Number(el.value); const arr = bp[side];
+      [arr[pos].hero, arr[to].hero] = [arr[to].hero, arr[pos].hero];
+      arr[pos].auto = false; arr[to].auto = false;   // 手动定位后不再被自动重排
+    } else return;
+    persist(); render();
+  });
+  root.addEventListener('input', e => { if (e.target.id === 'bp-q') { bp.q = e.target.value; bp._qFocus = true; render(); bp._qFocus = false; } });
+})();
+
+A.hooks.renderTab.bp = render;
+})();
