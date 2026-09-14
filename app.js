@@ -853,6 +853,7 @@ function showLadderProfile(pid) {
   const p = playerMap().get(pid); if (!p) return;
   if (!p.accountId) return toast('该选手没有 Steam ID，先在「编辑」里填上', 'err');
   const acc = p.accountId;
+  ladderHero.all = false;
   const head = (extra, pf) => {
     const pr = pf?.profile || null;
     return `<div class="ld-head">${pr?.avatarmedium ? `<img class="ld-avatar" src="${esc(pr.avatarmedium)}" alt="">` : ''}<div>
@@ -872,8 +873,11 @@ function showLadderProfile(pid) {
     showModal(head(` ｜ ${cached ? '缓存于' : '更新于'} ${new Date(d.at).toLocaleTimeString('zh-CN')} <button type="button" class="mini" id="ld-refresh">刷新</button>`, d.profile) + ladderHtml(p, d));
     $('#ld-refresh').onclick = () => { $('#ld-refresh').disabled = true; $('#ld-refresh').textContent = '刷新中…'; run(true).catch(e => toast('刷新失败：' + e.message, 'err')); };
     $('#modal-content').onclick = e => {
+      const th = e.target.closest('#ld-heroes th[data-key]');
+      const redraw = () => { const w = $('#ld-heroes-wrap'); if (w) w.innerHTML = ladderHeroesHtml(p, (d.heroes || []).filter(h => h.games > 0)); };
+      if (th) { const k = th.dataset.key; if (ladderHero.sort.key === k) ladderHero.sort.dir *= -1; else ladderHero.sort = { key: k, dir: k === 'name' ? 1 : -1 }; return redraw(); }
       const b = e.target.closest('button[data-act]'); if (!b) return;
-      if (b.dataset.act === 'ld-all-heroes') { $$('#ld-heroes tr.ld-more').forEach(tr => tr.classList.remove('ld-more')); b.remove(); }
+      if (b.dataset.act === 'ld-all-heroes') { ladderHero.all = !ladderHero.all; redraw(); }
       else if (b.dataset.act === 'ld-import') { hideModal(); $('#m-id').value = b.dataset.mid; switchTab('record'); window.scrollTo({ top: 0 }); fetchOpenDota(); }
       else if (b.dataset.act === 'ld-update') showLadderUpdate(pid, d);
     };
@@ -937,6 +941,41 @@ function showLadderUpdate(pid, d) {
   };
 }
 
+// 擅长英雄表：可点表头排序，默认按场次；显示全部 / 折叠状态在重排后保留
+const ladderHero = { sort: { key: 'games', dir: -1 }, all: false };
+const LADDER_HERO_LIMIT = 15;
+function ladderHeroesHtml(p, heroes) {
+  if (!heroes.length) return '<p class="hint">没有英雄数据</p>';
+  const mine = new Set(p.heroes);
+  const name = h => HERO_BY_ID[h.hero_id] || `英雄#${h.hero_id}`;
+  const wr = (w, g) => g ? w / g : -1;
+  const val = {
+    name: h => name(h), games: h => h.games, win: h => h.win, wr: h => wr(h.win, h.games), last: h => h.last_played || 0,
+    withwr: h => wr(h.with_win, h.with_games), againstwr: h => wr(h.against_win, h.against_games),
+  };
+  const { key, dir } = ladderHero.sort;
+  const f = val[key] || val.games;
+  const list = [...heroes].sort((a, b) => {
+    const x = f(a), y = f(b);
+    const c = typeof x === 'string' ? x.localeCompare(y, 'zh') : x - y;
+    return c ? c * dir : b.games - a.games;
+  });
+  const head = [['name', '英雄'], ['games', '#场次'], ['win', '#胜'], ['wr', '#胜率'], ['last', '最近使用'], ['withwr', '#队友选时胜率'], ['againstwr', '#对阵时胜率']];
+  const ths = head.map(([k, h]) => `<th data-key="${k}" class="${h.startsWith('#') ? 'num ' : ''}${k === key ? 'sorted' + (dir === 1 ? ' asc' : '') : ''}">${h.replace('#', '')}</th>`).join('');
+  const rows = list.map((h, i) => {
+    const n = name(h);
+    const c = [
+      `${mine.has(n) ? '<span class="ld-star" title="名单里已登记为擅长英雄">★</span> ' : ''}${esc(n)}`, h.games, h.win, `<b>${pct(h.win, h.games)}</b>`,
+      `<span title="${fmtTs(h.last_played)}">${fmtAgo(h.last_played)}</span>`,
+      h.with_games ? `${pct(h.with_win, h.with_games)} <span class="hint">/${h.with_games}</span>` : '-',
+      h.against_games ? `${pct(h.against_win, h.against_games)} <span class="hint">/${h.against_games}</span>` : '-',
+    ];
+    return `<tr class="${!ladderHero.all && i >= LADDER_HERO_LIMIT ? 'ld-more' : ''}${mine.has(n) ? ' ld-mine' : ''}">${c.map((x, j) => `<td${head[j][1].startsWith('#') ? ' class="num"' : ''}>${x}</td>`).join('')}</tr>`;
+  }).join('');
+  return `<div class="table-wrap" id="ld-heroes"><table class="tbl sortable"><thead><tr>${ths}</tr></thead><tbody>${rows}</tbody></table></div>
+    ${heroes.length > LADDER_HERO_LIMIT ? `<div class="form-actions" style="margin-top:6px"><button type="button" class="mini" data-act="ld-all-heroes">${ladderHero.all ? '只看前 ' + LADDER_HERO_LIMIT + ' 个' : '显示全部 ' + heroes.length + ' 个英雄'}</button>${key === 'wr' || key === 'withwr' || key === 'againstwr' ? '<span class="hint">按胜率排序时场次少的英雄容易排前面，结合场次看</span>' : ''}</div>` : ''}`;
+}
+
 function ladderHtml(p, d) {
   const out = [];
   if (d.errs.length) out.push(`<p class="hint ld-err">⚠ 部分接口失败：${d.errs.map(esc).join('；')}</p>`);
@@ -982,22 +1021,7 @@ function ladderHtml(p, d) {
   }
 
   // ---- 擅长英雄（heroes）----
-  if (heroes) {
-    const mine = new Set(p.heroes);
-    const LIMIT = 15;
-    const rows = heroes.map((h, i) => {
-      const name = HERO_BY_ID[h.hero_id] || `英雄#${h.hero_id}`;
-      return `<tr class="${i >= LIMIT ? 'ld-more' : ''}${mine.has(name) ? ' ld-mine' : ''}">${cells([
-        `${mine.has(name) ? '<span class="ld-star" title="名单里已登记为擅长英雄">★</span> ' : ''}${esc(name)}`, h.games, h.win, `<b>${pct(h.win, h.games)}</b>`,
-        `<span title="${fmtTs(h.last_played)}">${fmtAgo(h.last_played)}</span>`,
-        h.with_games ? `${pct(h.with_win, h.with_games)} <span class="hint">/${h.with_games}</span>` : '-',
-        h.against_games ? `${pct(h.against_win, h.against_games)} <span class="hint">/${h.against_games}</span>` : '-',
-      ], ['a', '#b', '#c', '#d', 'e', '#f', '#g'])}</tr>`;
-    });
-    out.push(`<h4>擅长英雄 <span class="hint" style="text-transform:none">共 ${heroes.length} 个英雄，按场次排序；★ = 名单里已登记</span></h4>
-      <div id="ld-heroes">${tbl(['英雄', '#场次', '#胜', '#胜率', '最近使用', '#队友选时胜率', '#对阵时胜率'], rows, '没有英雄数据')}</div>
-      ${heroes.length > LIMIT ? `<div class="form-actions" style="margin-top:6px"><button type="button" class="mini" data-act="ld-all-heroes">显示全部 ${heroes.length} 个英雄</button></div>` : ''}`);
-  }
+  if (heroes) out.push(`<h4>擅长英雄 <span class="hint" style="text-transform:none">共 ${heroes.length} 个英雄，点表头排序；★ = 名单里已登记</span></h4><div id="ld-heroes-wrap">${ladderHeroesHtml(p, heroes)}</div>`);
 
   // ---- 近期比赛（recentMatches）----
   if (recent) {
