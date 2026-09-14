@@ -835,17 +835,17 @@ async function fetchLadder(accountId, force) {
   if (hit && !force && Date.now() - hit.at < LADDER_TTL) return hit;
   const fetchT = (url, ms) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t)); };
   const get = async path => {
-    const res = await fetchT(`${OPENDOTA}/players/${accountId}/${path}`, 15000);
+    const res = await fetchT(`${OPENDOTA}/players/${accountId}${path ? '/' + path : ''}`, 15000);
     if (res.status === 429) throw new Error('请求太频繁，稍等一分钟再试');
     if (res.status === 404) throw new Error('OpenDota 没有这个账号');
     if (!res.ok) throw new Error('返回 ' + res.status);
     return res.json();
   };
-  const [h, r, c] = await Promise.allSettled([get('heroes'), get('recentMatches'), get('counts')]);
+  const [pf, h, r, c] = await Promise.allSettled([get(''), get('heroes'), get('recentMatches'), get('counts')]);
   const errs = [];
   const pick = (s, label) => { if (s.status === 'fulfilled') return s.value; errs.push(`${label}：${s.reason?.name === 'AbortError' ? '超时' : (s.reason?.message || s.reason)}`); return null; };
-  const data = { at: Date.now(), heroes: pick(h, '擅长英雄'), recent: pick(r, '近期比赛'), counts: pick(c, '统计'), errs };
-  if (data.heroes || data.recent || data.counts) ladderCache.set(accountId, data);
+  const data = { at: Date.now(), profile: pick(pf, '基础资料'), heroes: pick(h, '擅长英雄'), recent: pick(r, '近期比赛'), counts: pick(c, '统计'), errs };
+  if (data.profile || data.heroes || data.recent || data.counts) ladderCache.set(accountId, data);
   return data;
 }
 
@@ -853,24 +853,84 @@ function showLadderProfile(pid) {
   const p = playerMap().get(pid); if (!p) return;
   if (!p.accountId) return toast('该选手没有 Steam ID，先在「编辑」里填上', 'err');
   const acc = p.accountId;
-  const head = extra => `<h2>${esc(p.name)} ${rankBadge(p)} <span class="hint" style="font-weight:400">天梯资料</span></h2>
-    <div class="hint ld-meta">🆔 ${acc} ｜ 数据来源 <a href="https://www.opendota.com/players/${acc}" target="_blank" rel="noopener">OpenDota</a>${extra}</div>`;
-  showModal(head('') + '<p class="empty ld-loading">正在拉取擅长英雄 / 近期比赛 / 统计…</p>');
+  const head = (extra, pf) => {
+    const pr = pf?.profile || null;
+    return `<div class="ld-head">${pr?.avatarmedium ? `<img class="ld-avatar" src="${esc(pr.avatarmedium)}" alt="">` : ''}<div>
+      <h2>${esc(p.name)} ${rankBadge(p)} <span class="hint" style="font-weight:400">天梯资料</span></h2>
+      <div class="hint ld-meta">🆔 ${acc} ｜ 数据来源 <a href="https://www.opendota.com/players/${acc}" target="_blank" rel="noopener">OpenDota</a>${pr?.profileurl ? ` · <a href="${esc(pr.profileurl)}" target="_blank" rel="noopener">Steam</a>` : ''}${extra}</div>
+      ${pf ? `<div class="ld-profile">游戏昵称 <b>${esc(pr?.personaname || '-')}</b>${pr?.plus ? ' <span class="ld-plus" title="Dota Plus 会员">PLUS</span>' : ''} ｜ 天梯 ${pf.rank_tier ? tierBadge(pf.rank_tier) : '<span class="hint">未定级 / 未公开</span>'}${pf.leaderboard_rank ? ` <b>#${pf.leaderboard_rank}</b>` : ''}${pf.computed_mmr ? ` ｜ 估算 MMR <b>${Math.round(pf.computed_mmr)}</b><span class="hint" title="OpenDota 按对局平均段位估算，不是游戏内真实分">*</span>` : ''}${pr?.last_login ? ` ｜ 最近登录 ${esc(new Date(pr.last_login).toLocaleDateString('zh-CN'))}` : ''}
+        <button type="button" class="mini au-go" data-act="ld-update" title="用天梯资料里的昵称 / 段位 / 常用英雄更新名单里的这名选手，应用前可勾选">更新选手资料</button></div>` : ''}
+    </div></div>`;
+  };
+  showModal(head('', null) + '<p class="empty ld-loading">正在拉取基础资料 / 擅长英雄 / 近期比赛 / 统计…</p>');
   const run = async force => {
     const d = await fetchLadder(acc, force);
     if (!$('#modal').classList.contains('hidden') && $('#modal-content .ld-meta')) render(d);
   };
   const render = d => {
     const cached = Date.now() - d.at > 5000;
-    showModal(head(` ｜ ${cached ? '缓存于' : '更新于'} ${new Date(d.at).toLocaleTimeString('zh-CN')} <button type="button" class="mini" id="ld-refresh">刷新</button>`) + ladderHtml(p, d));
+    showModal(head(` ｜ ${cached ? '缓存于' : '更新于'} ${new Date(d.at).toLocaleTimeString('zh-CN')} <button type="button" class="mini" id="ld-refresh">刷新</button>`, d.profile) + ladderHtml(p, d));
     $('#ld-refresh').onclick = () => { $('#ld-refresh').disabled = true; $('#ld-refresh').textContent = '刷新中…'; run(true).catch(e => toast('刷新失败：' + e.message, 'err')); };
     $('#modal-content').onclick = e => {
       const b = e.target.closest('button[data-act]'); if (!b) return;
       if (b.dataset.act === 'ld-all-heroes') { $$('#ld-heroes tr.ld-more').forEach(tr => tr.classList.remove('ld-more')); b.remove(); }
       else if (b.dataset.act === 'ld-import') { hideModal(); $('#m-id').value = b.dataset.mid; switchTab('record'); window.scrollTo({ top: 0 }); fetchOpenDota(); }
+      else if (b.dataset.act === 'ld-update') showLadderUpdate(pid, d);
     };
   };
-  run(false).catch(e => { if (!$('#modal').classList.contains('hidden')) showModal(head('') + `<p class="empty">拉取失败：${esc(e.message || e)}</p>`); });
+  run(false).catch(e => { if (!$('#modal').classList.contains('hidden')) showModal(head('', null) + `<p class="empty">拉取失败：${esc(e.message || e)}</p>`); });
+}
+
+// 用天梯资料更新名单：昵称 ← 游戏昵称；段位 ← rank_tier；擅长英雄 ← 总场次前 5（≥ 10 场，不足 3 个则放宽到前 3）
+// 位置不更新：OpenDota 的 lane_role 只在解析过的比赛里有，绝大多数是 0，凑不出可靠的号位
+function ladderSuggest(p, d) {
+  const out = [];
+  const pr = d.profile?.profile;
+  const nick = (pr?.personaname || '').trim();
+  if (nick) {
+    const taken = state.players.find(x => x.name === nick && x.id !== p.id);
+    out.push({ key: 'name', label: '昵称', cur: p.name, next: nick, same: nick === p.name, block: taken ? `名单里已有同名选手「${taken.name}」` : '' });
+  }
+  const tier = rankFromTier(d.profile?.rank_tier);
+  if (tier) out.push({ key: 'rank', label: '段位', cur: `${p.rank}${p.stars ? ' ' + p.stars : ''}`, next: `${tier.rank}${tier.stars ? ' ' + tier.stars : ''}`, same: tier.rank === p.rank && (tier.stars || 0) === (p.stars || 0), val: tier });
+  const hs = Array.isArray(d.heroes) ? [...d.heroes].filter(h => h.games > 0).sort((a, b) => b.games - a.games) : [];
+  if (hs.length) {
+    let pick = hs.filter(h => h.games >= 10).slice(0, 5);
+    if (pick.length < 3) pick = hs.slice(0, 3);
+    const heroes = pick.map(h => HERO_BY_ID[h.hero_id]).filter(Boolean);
+    if (heroes.length) out.push({ key: 'heroes', label: '擅长英雄', cur: p.heroes.join('、') || '-', next: heroes.join('、'), same: heroes.join('、') === p.heroes.join('、'), val: heroes, note: pick.map(h => `${HERO_BY_ID[h.hero_id] || '?'} ${h.games} 场`).join('，') });
+  }
+  return out;
+}
+function showLadderUpdate(pid, d) {
+  const p = playerMap().get(pid); if (!p) return;
+  const items = ladderSuggest(p, d);
+  const changed = items.filter(i => !i.same);
+  showModal(`<h2>更新选手资料：${esc(p.name)}</h2>
+    <p class="hint">下面是从 OpenDota 天梯资料算出的建议，勾选要应用的项。位置不在此列：OpenDota 的分路数据只覆盖解析过的比赛，凑不出可靠号位，请用「按战绩重算」。</p>
+    ${items.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th></th><th>项目</th><th>现在</th><th>建议</th></tr></thead><tbody>
+      ${items.map(i => `<tr class="${i.same ? 'ld-same' : ''}"><td><input type="checkbox" data-lu="${i.key}" ${i.same || i.block ? 'disabled' : 'checked'}></td><td>${i.label}</td><td class="wrap">${esc(i.cur)}</td>
+        <td class="wrap">${i.same ? '<span class="hint">一致，无需更新</span>' : `<b>${esc(i.next)}</b>`}${i.block ? `<div class="hint ld-err">⚠ ${esc(i.block)}，不能改名</div>` : ''}${i.note && !i.same ? `<div class="hint">${esc(i.note)}</div>` : ''}</td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="empty">天梯资料里没有可用于更新的内容</p>'}
+    <div class="form-actions" style="margin-top:12px">
+      <button type="button" class="primary" id="lu-apply" ${changed.some(i => !i.block) ? '' : 'disabled'}>应用勾选项</button>
+      <button type="button" class="ghost" id="lu-back">返回天梯资料</button>
+    </div>`);
+  $('#modal-content').onclick = null;
+  $('#lu-back').onclick = () => showLadderProfile(pid);
+  $('#lu-apply').onclick = () => {
+    const on = new Set($$('#modal-content input[data-lu]:checked').map(c => c.dataset.lu));
+    const done = [];
+    for (const i of items) {
+      if (!on.has(i.key) || i.same || i.block) continue;
+      if (i.key === 'name') { p.name = i.next; done.push('昵称'); }
+      else if (i.key === 'rank') { p.rank = i.val.rank; p.stars = i.val.stars; done.push('段位'); }
+      else if (i.key === 'heroes') { p.heroes = i.val; done.push('擅长英雄'); }
+    }
+    if (!done.length) return toast('没有勾选任何项', 'err');
+    save(); renderAll(); if (ui.editingPlayer === pid) startEditPlayer(p);
+    toast(`已更新 ${done.join(' / ')}`, 'ok'); showLadderProfile(pid);
+  };
 }
 
 function ladderHtml(p, d) {

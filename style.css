@@ -430,3 +430,10 @@ body.readonly .tabs{pointer-events:none}
 .stat-tile .v .rank{font-size:14px;vertical-align:middle}
 @media (max-width:900px){.ld-grid{grid-template-columns:1fr 1fr}}
 @media (max-width:600px){.ld-grid{grid-template-columns:1fr}}
+.ld-head{display:flex;gap:14px;align-items:flex-start}
+.ld-head>div{min-width:0;flex:1}
+.ld-avatar{width:56px;height:56px;border-radius:8px;border:1px solid var(--border);flex:none;margin-top:2px}
+.ld-profile{margin-top:6px;font-size:13px;display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center}
+.ld-profile .rank{vertical-align:middle}
+.ld-plus{font-size:10px;font-weight:700;color:#1a1200;background:var(--accent);border-radius:3px;padding:0 4px;vertical-align:middle}
+tr.ld-same td{color:var(--muted)}
