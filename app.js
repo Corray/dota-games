@@ -835,7 +835,7 @@ async function fetchLadder(accountId, force) {
   if (hit && !force && Date.now() - hit.at < LADDER_TTL) return hit;
   const fetchT = (url, ms) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t)); };
   const get = async path => {
-    const res = await fetchT(`${OPENDOTA}/players/${accountId}${path ? '/' + path : ''}`, 15000);
+    const res = await fetchT(`${OPENDOTA}/players/${accountId}${path ? '/' + path : ''}`, 30000); // 基础资料接口实测常要 5-15 秒
     if (res.status === 429) throw new Error('请求太频繁，稍等一分钟再试');
     if (res.status === 404) throw new Error('OpenDota 没有这个账号');
     if (!res.ok) throw new Error('返回 ' + res.status);
@@ -886,10 +886,14 @@ function showLadderProfile(pid) {
 function ladderSuggest(p, d) {
   const out = [];
   const pr = d.profile?.profile;
-  const nick = (pr?.personaname || '').trim();
+  // 昵称取最新的：aliases 按改名时间倒序，第一条是最近一次改的名；profile.personaname 是 OpenDota 缓存的，可能落后
+  const aliases = (Array.isArray(d.profile?.aliases) ? d.profile.aliases : []).filter(a => a.personaname && a.name_since).sort((a, b) => new Date(b.name_since) - new Date(a.name_since));
+  const nick = (aliases[0]?.personaname || pr?.personaname || '').trim();
   if (nick) {
     const taken = state.players.find(x => x.name === nick && x.id !== p.id);
-    out.push({ key: 'name', label: '昵称', cur: p.name, next: nick, same: nick === p.name, block: taken ? `名单里已有同名选手「${taken.name}」` : '' });
+    const old = aliases.slice(1, 4).map(a => `${a.personaname}（${a.name_since.slice(0, 10)}）`);
+    out.push({ key: 'name', label: '昵称', cur: p.name, next: nick, same: nick === p.name, block: taken ? `名单里已有同名选手「${taken.name}」` : '',
+      note: (aliases[0] ? `${aliases[0].name_since.slice(0, 10)} 改为此名` : '') + (old.length ? `；曾用名：${old.join('、')}${aliases.length > 4 ? ` 等 ${aliases.length - 1} 个` : ''}` : '') });
   }
   const tier = rankFromTier(d.profile?.rank_tier);
   if (tier) out.push({ key: 'rank', label: '段位', cur: `${p.rank}${p.stars ? ' ' + p.stars : ''}`, next: `${tier.rank}${tier.stars ? ' ' + tier.stars : ''}`, same: tier.rank === p.rank && (tier.stars || 0) === (p.stars || 0), val: tier });
