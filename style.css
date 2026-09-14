@@ -413,3 +413,20 @@ input.au-nnum.wide{width:4.4em}
 .share-bar{margin:0 0 14px;padding:9px 14px;border-radius:10px;background:#1d2735;border:1px solid #2f4055;color:#b8c2d0;font-size:13px}
 .share-bar.err{background:#3a1c1c;border-color:#6b2b2b;color:#ffb3b3}
 body.readonly .tabs{pointer-events:none}
+
+/* ===== 天梯资料弹窗（OpenDota 选手接口） ===== */
+.ld-meta a{color:var(--accent)}
+.ld-err{color:#e0b341}
+.ld-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0 16px}
+.ld-grid .tbl{font-size:12px}
+.ld-grid .tbl th,.ld-grid .tbl td{padding:4px 8px}
+#ld-heroes tr.ld-more{display:none}
+#ld-heroes tr.ld-mine td:first-child{font-weight:600}
+.ld-star{color:var(--accent)}
+.ld-strip{display:flex;gap:2px;margin-top:6px;flex-wrap:wrap}
+.ld-strip i{display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--dire-dim)}
+.ld-strip i.w{background:var(--radiant)}
+.ld-strip i.l{background:var(--dire)}
+.stat-tile .v .rank{font-size:14px;vertical-align:middle}
+@media (max-width:900px){.ld-grid{grid-template-columns:1fr 1fr}}
+@media (max-width:600px){.ld-grid{grid-template-columns:1fr}}

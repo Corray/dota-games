@@ -241,6 +241,7 @@ const hooks = { renderTab: {}, afterSaveMatch: [] };
       if (ui.editingPlayer === p.id) resetPlayerForm();
       save(); renderPlayers(); toast('已删除', 'ok');
     } else if (b.dataset.act === 'detail') showPlayerDetail(p.id);
+    else if (b.dataset.act === 'ladder') showLadderProfile(p.id);
   });
 
   $('#bulk-import').addEventListener('click', () => {
@@ -306,7 +307,7 @@ function renderPlayers() {
       <td class="wrap">${p.heroes.map(h => `<span class="hero-chip">${esc(h)}</span>`).join('') || '<span class="hint">-</span>'}</td>
       <td class="num">${s ? s.g : 0}</td>
       <td class="num">${s ? pct(s.w, s.g) : '-'}</td>
-      <td><div class="actions"><button data-act="edit" data-id="${p.id}">编辑</button><button class="danger" data-act="del" data-id="${p.id}">删除</button></div></td>
+      <td><div class="actions"><button data-act="ladder" data-id="${p.id}" ${p.accountId ? 'title="查看 OpenDota 天梯资料：擅长英雄 / 近期比赛 / 统计"' : 'disabled title="先在「编辑」里填 Steam ID 才能查天梯资料"'}>查看天梯资料</button><button data-act="edit" data-id="${p.id}">编辑</button><button class="danger" data-act="del" data-id="${p.id}">删除</button></div></td>
     </tr>`;
   }).join('');
 }
@@ -810,6 +811,166 @@ function showPlayerDetail(pid) {
     if (sug.heroes.length) p.heroes = sug.heroes;
     save(); renderAll(); showPlayerDetail(pid); toast('已按战绩重置', 'ok');
   };
+}
+
+// ============ 天梯资料（OpenDota 选手接口：heroes / recentMatches / counts） ============
+// 字典均来自 OpenDota dotaconstants；未收录的编号原样显示
+const LOBBY_NAME = { 0: '普通匹配', 1: '练习赛', 2: '锦标赛', 3: '教程', 4: '合作人机', 5: '组排天梯', 6: '单排天梯', 7: '天梯', 8: '1v1 中路', 9: '战斗杯', 10: '本地人机', 11: '自定义', 12: '活动', 13: '人机组队', 14: '组排人机' };
+const GAME_MODE_NAME = { 0: '未知', 1: '全阵营选择', 2: '队长模式', 3: '随机征召', 4: '单一征召', 5: '全部随机', 6: '新手模式', 7: '外交', 8: '反向征召', 9: '贪婪', 10: '教程', 11: '中路对决', 12: '至少选择', 13: '新手组队', 14: '同英雄', 15: '自定义', 16: '队长征召', 17: '均衡征召', 18: '技能征召', 19: '活动', 20: '全随机死亡竞赛', 21: '1v1 中路', 22: '全英雄选择', 23: '加速模式', 24: '突变' };
+const LANE_ROLE_NAME = { 0: '未知 / 未解析', 1: '优势路', 2: '中路', 3: '劣势路', 4: '打野 / 游走' };
+const LEAVER_NAME = { 0: '正常完成', 1: '提前退出（安全）', 2: '断线过久', 3: '放弃', 4: 'AFK', 5: '从未连接', 6: '从未连接（超时）' };
+const REGION_NAME = { 1: '美西', 2: '美东', 3: '欧洲', 5: '新加坡（东南亚）', 6: '迪拜', 7: '澳大利亚', 8: '斯德哥尔摩', 9: '奥地利', 10: '巴西', 11: '南非', 12: '完美·电信上海', 13: '完美·联通', 14: '智利', 15: '秘鲁', 16: '印度', 17: '完美·电信广东', 18: '完美·电信浙江', 19: '日本', 20: '完美·电信武汉', 25: '完美·联通天津', 37: '台湾', 38: '阿根廷' };
+// OpenDota 的 patch 字段是内部编号（constants/patch 数组下标），这里只收 7.20 以后的
+const PATCH_NAME = { 39: '7.20', 40: '7.21', 41: '7.22', 42: '7.23', 43: '7.24', 44: '7.25', 45: '7.26', 46: '7.27', 47: '7.28', 48: '7.29', 49: '7.30', 50: '7.31', 51: '7.32', 52: '7.33', 53: '7.34', 54: '7.35', 55: '7.36', 56: '7.37', 57: '7.38', 58: '7.39', 59: '7.40', 60: '7.41' };
+const LADDER_TTL = 10 * 60 * 1000; // 同一账号 10 分钟内重开弹窗不再请求（OpenDota 匿名限额 60 次/分钟）
+const ladderCache = new Map();
+
+const fmtTs = ts => { if (!ts) return '-'; const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+const fmtAgo = ts => { if (!ts) return '-'; const s = Date.now() / 1000 - ts; if (s < 3600) return `${Math.max(1, Math.floor(s / 60))} 分钟前`; if (s < 86400) return `${Math.floor(s / 3600)} 小时前`; if (s < 86400 * 30) return `${Math.floor(s / 86400)} 天前`; if (s < 86400 * 365) return `${Math.floor(s / 86400 / 30)} 个月前`; return `${(s / 86400 / 365).toFixed(1)} 年前`; };
+const fmtDur = sec => sec ? `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : '-';
+const tierBadge = tier => { const r = rankFromTier(tier); return r ? `<span class="rank ${rankCls(r.rank)}">${esc(r.rank)}${r.stars ? ' ' + r.stars : ''}</span>` : '<span class="hint">-</span>'; };
+
+async function fetchLadder(accountId, force) {
+  const hit = ladderCache.get(accountId);
+  if (hit && !force && Date.now() - hit.at < LADDER_TTL) return hit;
+  const fetchT = (url, ms) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t)); };
+  const get = async path => {
+    const res = await fetchT(`${OPENDOTA}/players/${accountId}/${path}`, 15000);
+    if (res.status === 429) throw new Error('请求太频繁，稍等一分钟再试');
+    if (res.status === 404) throw new Error('OpenDota 没有这个账号');
+    if (!res.ok) throw new Error('返回 ' + res.status);
+    return res.json();
+  };
+  const [h, r, c] = await Promise.allSettled([get('heroes'), get('recentMatches'), get('counts')]);
+  const errs = [];
+  const pick = (s, label) => { if (s.status === 'fulfilled') return s.value; errs.push(`${label}：${s.reason?.name === 'AbortError' ? '超时' : (s.reason?.message || s.reason)}`); return null; };
+  const data = { at: Date.now(), heroes: pick(h, '擅长英雄'), recent: pick(r, '近期比赛'), counts: pick(c, '统计'), errs };
+  if (data.heroes || data.recent || data.counts) ladderCache.set(accountId, data);
+  return data;
+}
+
+function showLadderProfile(pid) {
+  const p = playerMap().get(pid); if (!p) return;
+  if (!p.accountId) return toast('该选手没有 Steam ID，先在「编辑」里填上', 'err');
+  const acc = p.accountId;
+  const head = extra => `<h2>${esc(p.name)} ${rankBadge(p)} <span class="hint" style="font-weight:400">天梯资料</span></h2>
+    <div class="hint ld-meta">🆔 ${acc} ｜ 数据来源 <a href="https://www.opendota.com/players/${acc}" target="_blank" rel="noopener">OpenDota</a>${extra}</div>`;
+  showModal(head('') + '<p class="empty ld-loading">正在拉取擅长英雄 / 近期比赛 / 统计…</p>');
+  const run = async force => {
+    const d = await fetchLadder(acc, force);
+    if (!$('#modal').classList.contains('hidden') && $('#modal-content .ld-meta')) render(d);
+  };
+  const render = d => {
+    const cached = Date.now() - d.at > 5000;
+    showModal(head(` ｜ ${cached ? '缓存于' : '更新于'} ${new Date(d.at).toLocaleTimeString('zh-CN')} <button type="button" class="mini" id="ld-refresh">刷新</button>`) + ladderHtml(p, d));
+    $('#ld-refresh').onclick = () => { $('#ld-refresh').disabled = true; $('#ld-refresh').textContent = '刷新中…'; run(true).catch(e => toast('刷新失败：' + e.message, 'err')); };
+    $('#modal-content').onclick = e => {
+      const b = e.target.closest('button[data-act]'); if (!b) return;
+      if (b.dataset.act === 'ld-all-heroes') { $$('#ld-heroes tr.ld-more').forEach(tr => tr.classList.remove('ld-more')); b.remove(); }
+      else if (b.dataset.act === 'ld-import') { hideModal(); $('#m-id').value = b.dataset.mid; switchTab('record'); window.scrollTo({ top: 0 }); fetchOpenDota(); }
+    };
+  };
+  run(false).catch(e => { if (!$('#modal').classList.contains('hidden')) showModal(head('') + `<p class="empty">拉取失败：${esc(e.message || e)}</p>`); });
+}
+
+function ladderHtml(p, d) {
+  const out = [];
+  if (d.errs.length) out.push(`<p class="hint ld-err">⚠ 部分接口失败：${d.errs.map(esc).join('；')}</p>`);
+  const heroes = Array.isArray(d.heroes) ? d.heroes.filter(h => h.games > 0) : null;
+  const recent = Array.isArray(d.recent) ? d.recent : null;
+  const counts = d.counts && typeof d.counts === 'object' ? d.counts : null;
+  const countsEmpty = !counts || !Object.values(counts).some(v => v && Object.keys(v).length); // 空账号返回的是 { lobby_type: {}, ... }
+  const empty = (!heroes || !heroes.length) && (!recent || !recent.length) && countsEmpty;
+  if (empty && !d.errs.length) return out.join('') + '<p class="empty">OpenDota 上没有这个账号的比赛数据。可能是资料未公开（游戏内「设置 → 社交 → 公开比赛数据」），或 OpenDota 尚未收录。</p>';
+  const tbl = (head, rows, empty) => rows.length
+    ? `<div class="table-wrap"><table class="tbl"><thead><tr>${head.map(h => `<th${h.startsWith('#') ? ' class="num"' : ''}>${h.replace('#', '')}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`
+    : `<p class="hint">${empty}</p>`;
+  const cells = (arr, head) => arr.map((c, i) => `<td${head[i].startsWith('#') ? ' class="num"' : ''}>${c}</td>`).join('');
+
+  // ---- 统计（counts）----
+  if (counts) {
+    const sum = key => Object.values(counts[key] || {}).reduce((a, v) => ({ g: a.g + (v.games || 0), w: a.w + (v.win || 0) }), { g: 0, w: 0 });
+    const total = sum('is_radiant').g ? sum('is_radiant') : sum('lobby_type');
+    const rad = counts.is_radiant?.['1'] || { games: 0, win: 0 }, dire = counts.is_radiant?.['0'] || { games: 0, win: 0 };
+    const ranked = ['5', '6', '7'].reduce((a, k) => { const v = counts.lobby_type?.[k]; return v ? { g: a.g + v.games, w: a.w + v.win } : a; }, { g: 0, w: 0 });
+    const leave = Object.entries(counts.leaver_status || {}).filter(([k]) => Number(k) >= 2).reduce((n, [, v]) => n + v.games, 0);
+    out.push(`<h4>统计 <span class="hint" style="text-transform:none">OpenDota 收录的全部比赛</span></h4>
+      <div class="overview">
+        <div class="stat-tile"><div class="k">总场次</div><div class="v">${total.g}</div><div class="s">${total.w} 胜 ${total.g - total.w} 负</div></div>
+        <div class="stat-tile"><div class="k">总胜率</div><div class="v">${pct(total.w, total.g)}</div><div class="s">天梯 ${pct(ranked.w, ranked.g)}（${ranked.g} 场）</div></div>
+        <div class="stat-tile"><div class="k">天辉</div><div class="v">${pct(rad.win, rad.games)}</div><div class="s">${rad.win}/${rad.games}</div></div>
+        <div class="stat-tile"><div class="k">夜魇</div><div class="v">${pct(dire.win, dire.games)}</div><div class="s">${dire.win}/${dire.games}</div></div>
+        <div class="stat-tile"><div class="k">逃跑 / 断线</div><div class="v">${leave}</div><div class="s">${total.g ? (leave / total.g * 100).toFixed(1) + '%' : '-'} 的比赛</div></div>
+      </div>`);
+    const dist = (key, title, names, fmtKey) => {
+      const rows = Object.entries(counts[key] || {}).filter(([, v]) => v.games > 0).sort((a, b) => b[1].games - a[1].games)
+        .map(([k, v]) => `<tr>${cells([esc(names?.[k] ?? (fmtKey ? fmtKey(k) : k)), v.games, pct(v.win, v.games)], ['a', '#b', '#c'])}</tr>`);
+      return `<div><h4>${title}</h4>${tbl([title.split(' ')[0], '#场次', '#胜率'], rows, '无数据')}</div>`;
+    };
+    out.push(`<div class="ld-grid">
+      ${dist('lobby_type', '大厅类型', LOBBY_NAME, k => `类型 ${k}`)}
+      ${dist('game_mode', '游戏模式', GAME_MODE_NAME, k => `模式 ${k}`)}
+      ${dist('lane_role', '分路', LANE_ROLE_NAME, k => `分路 ${k}`)}
+      ${dist('region', '服务器', REGION_NAME, k => k === 'NaN' ? '未知' : `服务器 ${k}`)}
+      ${dist('patch', '游戏版本', PATCH_NAME, k => `版本 #${k}`)}
+      ${dist('leaver_status', '离开状态', LEAVER_NAME, k => `状态 ${k}`)}
+    </div>`);
+  }
+
+  // ---- 擅长英雄（heroes）----
+  if (heroes) {
+    const mine = new Set(p.heroes);
+    const LIMIT = 15;
+    const rows = heroes.map((h, i) => {
+      const name = HERO_BY_ID[h.hero_id] || `英雄#${h.hero_id}`;
+      return `<tr class="${i >= LIMIT ? 'ld-more' : ''}${mine.has(name) ? ' ld-mine' : ''}">${cells([
+        `${mine.has(name) ? '<span class="ld-star" title="名单里已登记为擅长英雄">★</span> ' : ''}${esc(name)}`, h.games, h.win, `<b>${pct(h.win, h.games)}</b>`,
+        `<span title="${fmtTs(h.last_played)}">${fmtAgo(h.last_played)}</span>`,
+        h.with_games ? `${pct(h.with_win, h.with_games)} <span class="hint">/${h.with_games}</span>` : '-',
+        h.against_games ? `${pct(h.against_win, h.against_games)} <span class="hint">/${h.against_games}</span>` : '-',
+      ], ['a', '#b', '#c', '#d', 'e', '#f', '#g'])}</tr>`;
+    });
+    out.push(`<h4>擅长英雄 <span class="hint" style="text-transform:none">共 ${heroes.length} 个英雄，按场次排序；★ = 名单里已登记</span></h4>
+      <div id="ld-heroes">${tbl(['英雄', '#场次', '#胜', '#胜率', '最近使用', '#队友选时胜率', '#对阵时胜率'], rows, '没有英雄数据')}</div>
+      ${heroes.length > LIMIT ? `<div class="form-actions" style="margin-top:6px"><button type="button" class="mini" data-act="ld-all-heroes">显示全部 ${heroes.length} 个英雄</button></div>` : ''}`);
+  }
+
+  // ---- 近期比赛（recentMatches）----
+  if (recent) {
+    const won = m => (m.player_slot < 128) === !!m.radiant_win;
+    const w = recent.filter(won).length;
+    const avg = (f, n = recent.length) => n ? recent.reduce((a, m) => a + (f(m) || 0), 0) / n : 0;
+    const ranks = recent.filter(m => m.average_rank);
+    const avgTier = ranks.length ? Math.round(ranks.reduce((a, m) => a + m.average_rank, 0) / ranks.length) : 0;
+    const known = new Set(state.matches.map(m => m.id));
+    const rows = recent.map(m => {
+      const hero = HERO_BY_ID[m.hero_id] || `英雄#${m.hero_id}`;
+      const rad = m.player_slot < 128;
+      const id = String(m.match_id);
+      return `<tr>${cells([
+        `<span title="${fmtTs(m.start_time)}">${fmtAgo(m.start_time)}</span>`,
+        esc(hero),
+        `<span class="side ${rad ? 'radiant' : 'dire'}">${rad ? '天辉' : '夜魇'}</span>`,
+        won(m) ? '<span class="win">胜</span>' : '<span class="loss">负</span>',
+        `${m.kills}/${m.deaths}/${m.assists}`,
+        `${m.gold_per_min || 0} / ${m.xp_per_min || 0}`,
+        m.last_hits ?? '-',
+        fmtDur(m.duration),
+        `${esc(GAME_MODE_NAME[m.game_mode] ?? `模式 ${m.game_mode}`)}<div class="hint">${esc(LOBBY_NAME[m.lobby_type] ?? `类型 ${m.lobby_type}`)}${m.party_size ? ` · ${m.party_size} 人组` : ''}</div>`,
+        tierBadge(m.average_rank),
+        `<a href="https://www.opendota.com/matches/${id}" target="_blank" rel="noopener" class="hint">${id}</a>${known.has(id) ? ' <span class="hint">已记录</span>' : ` <button type="button" class="mini" data-act="ld-import" data-mid="${id}" title="填入「记录比赛」的比赛 ID 并查询阵容">导入</button>`}`,
+      ], ['a', 'b', 'c', 'd', '#e', '#f', '#g', '#h', 'i', 'j', 'k'])}</tr>`;
+    });
+    out.push(`<h4>近期比赛 <span class="hint" style="text-transform:none">最近 ${recent.length} 场</span></h4>
+      ${recent.length ? `<div class="overview" style="margin-bottom:10px">
+        <div class="stat-tile"><div class="k">近 ${recent.length} 场</div><div class="v">${w} 胜 ${recent.length - w} 负</div><div class="s ld-strip">${recent.map(m => `<i class="${won(m) ? 'w' : 'l'}" title="${esc(HERO_BY_ID[m.hero_id] || '')} ${won(m) ? '胜' : '负'}"></i>`).join('')}</div></div>
+        <div class="stat-tile"><div class="k">场均 KDA</div><div class="v">${((avg(m => m.kills) + avg(m => m.assists)) / Math.max(1, avg(m => m.deaths))).toFixed(2)}</div><div class="s">${avg(m => m.kills).toFixed(1)} / ${avg(m => m.deaths).toFixed(1)} / ${avg(m => m.assists).toFixed(1)}</div></div>
+        <div class="stat-tile"><div class="k">场均 GPM / XPM</div><div class="v">${Math.round(avg(m => m.gold_per_min))} / ${Math.round(avg(m => m.xp_per_min))}</div><div class="s">场均时长 ${fmtDur(Math.round(avg(m => m.duration)))}</div></div>
+        <div class="stat-tile"><div class="k">对局平均段位</div><div class="v">${tierBadge(avgTier)}</div><div class="s">${ranks.length} 场有段位数据</div></div>
+      </div>` : ''}
+      ${tbl(['时间', '英雄', '阵营', '结果', '#K/D/A', '#GPM / XPM', '#正补', '#时长', '模式', '对局段位', '比赛 ID'], rows, '没有近期比赛')}`);
+  }
+  return out.join('');
 }
 
 // ============ 按战绩重算擅长位置 / 英雄 ============
