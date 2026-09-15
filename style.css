@@ -479,3 +479,5 @@ tr.ld-same td{color:var(--muted)}
 .bp-hero.focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(224,168,58,.3)}
 .bp-hero.nodata{opacity:.35;cursor:not-allowed}
 @media (max-width:900px){.bp-layout{grid-template-columns:1fr}.bp-grid3{grid-template-columns:1fr}}
+.bp-src{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.bp-cand i.hint{font-size:10px}

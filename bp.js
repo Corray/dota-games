@@ -17,8 +17,10 @@ const COUNTER_WEIGHT = 1.2;
 const TEMP = [[1.1, .8, 1.2, .8, .8], [.8, 1.2, .8, .8, .8], [1.3, 1.0, .8, .8, .8], [1.2, 1.2, .8, .8, .8], [.8, .8, 1.4, .8, .8]];
 const SUGGEST_N = 8;
 
-let D = null, loading = null;      // 数据 + 索引
+let D = null, loading = null;      // STRATZ 数据 + 索引（bp-data.json）
 let idx = new Map();               // heroId → 矩阵下标
+let OD = null, odLoading = null, odIdx = new Map();   // 第二数据源：OpenDota 职业比赛对位（bp-data-od.json），只有克制维度
+const OD_K = 20;                   // 收缩系数：胜率按 (胜 + 10) / (场 + 20) 算，2 场 2 胜不会变成 100%
 const bp = load();
 function load() {
   try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && d.ally && d.enemy) return d; } catch {}
@@ -34,8 +36,27 @@ function ensureData() {
     .catch(e => { loading = null; throw e; });
   return loading;
 }
+function ensureOd() {
+  if (OD) return Promise.resolve(OD);
+  if (!odLoading) odLoading = fetch('bp-data-od.json', { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(d => { OD = d; odIdx = new Map(d.heroes.map((id, i) => [id, i])); return d; })
+    .catch(e => { odLoading = null; throw e; });
+  return odLoading;
+}
+const useOd = () => bp.src === 'od' && !!OD;
 const has = id => idx.has(id);
-const M = (name, a, b) => { const i = idx.get(a), j = idx.get(b); return i == null || j == null ? 0 : D[name][i][j] / 1000; };
+// OpenDota 对位：{ v: 收缩后胜率, g: 场次 }
+function odVersus(a, b) {
+  const i = odIdx.get(a), j = odIdx.get(b);
+  if (i == null || j == null) return { v: 0.5, g: 0 };
+  const g = OD.games[i][j]; if (!g) return { v: 0.5, g: 0 };
+  return { v: (OD.versus[i][j] / 1000 * g + OD_K / 2) / (g + OD_K), g };
+}
+// 矩阵读取：克制 / 对位胜率按当前数据源；同队胜率 / 配合率只有 STRATZ 有
+const M = (name, a, b) => {
+  if (useOd() && (name === 'versus' || name === 'counter')) { const { v } = odVersus(a, b); return name === 'versus' ? v : v - 0.5; }
+  const i = idx.get(a), j = idx.get(b); return i == null || j == null ? 0 : D[name][i][j] / 1000;
+};
 const lanes = id => { const i = idx.get(id); return i == null ? [0, 0, 0, 0, 0] : D.lanes[i].map(x => x / 1000); };
 const hname = id => HERO_BY_ID[id] || `英雄#${id}`;
 const pct = x => (x * 100).toFixed(1) + '%';
@@ -85,7 +106,7 @@ function suggestPicks() {
   return { base, out };
 }
 // 禁用建议：敌方各空位放入候选后，对我方优势伤害最大的
-function strength(id) { const i = idx.get(id); const row = D.versus[i]; let s = 0, n = 0; row.forEach((v, j) => { if (j !== i && v) { s += v; n++; } }); return n ? s / n / 1000 : 0.5; }
+function strength(id) { let s = 0, n = 0; for (const h of D.heroes) { if (h === id) continue; const v = M('versus', id, h); if (v) { s += v; n++; } } return n ? s / n : 0.5; }
 function suggestBans() {
   const ally = allyIds(), enemy = enemyIds();
   if (!ally.some(Boolean)) {   // 没有我方英雄时克制分恒为 0.5，改按版本强势度排
@@ -107,7 +128,7 @@ function suggestBans() {
 // 英雄查询：它克制的 / 克制它的 / 配合好的
 function heroInfo(id) {
   const others = D.heroes.filter(h => h !== id);
-  const by = (name, dir) => [...others].sort((a, b) => dir * (M(name, id, b) - M(name, id, a))).slice(0, 8).map(h => ({ id: h, v: M(name, id, h) }));
+  const by = (name, dir) => [...others].sort((a, b) => dir * (M(name, id, b) - M(name, id, a))).slice(0, 8).map(h => ({ id: h, v: M(name, id, h), g: useOd() && name === 'versus' ? odVersus(id, h).g : null }));
   return { good: by('versus', 1), bad: by('versus', -1), with: by('with', 1), lanes: lanes(id) };
 }
 // 自动分配号位：把这一侧所有自动放入（未手动换位）的英雄一起重排，取出场率总和最大的排列；手动定过位置的槽固定不动
@@ -164,7 +185,8 @@ function render() {
   const root = $('#bp-root'); if (!root) return;
   if (!D) {
     root.innerHTML = '<div class="card"><p class="empty">正在加载英雄对位数据…</p></div>';
-    ensureData().then(render).catch(e => { root.innerHTML = `<div class="card"><p class="empty">加载 bp-data.json 失败：${esc(e.message)}</p></div>`; });
+    ensureData().then(() => bp.src === 'od' ? ensureOd().catch(() => { bp.src = 'stratz'; }) : null).then(render)
+      .catch(e => { root.innerHTML = `<div class="card"><p class="empty">加载 bp-data.json 失败：${esc(e.message)}</p></div>`; });
     return;
   }
   const P = A.playerMap();
@@ -192,7 +214,7 @@ function render() {
     const f = bp.focus;
     if (f && has(f)) {
       const info = heroInfo(f);
-      const list = (rows, fmt) => `<div class="bp-list">${rows.map(r => `<button type="button" class="bp-cand" data-act="focus" data-hero="${r.id}"><span>${esc(hname(r.id))}</span><b>${fmt(r.v)}</b></button>`).join('')}</div>`;
+      const list = (rows, fmt) => `<div class="bp-list">${rows.map(r => `<button type="button" class="bp-cand" data-act="focus" data-hero="${r.id}" ${r.g != null ? `title="${r.g} 场职业比赛，已按场次收缩"` : ''}><span>${esc(hname(r.id))}</span><b>${fmt(r.v)}</b>${r.g != null ? `<i class="hint">${r.g}场</i>` : ''}</button>`).join('')}</div>`;
       right += `<div class="card"><div class="card-head"><h3>英雄查询：${esc(hname(f))}</h3><span class="hint">常见号位 ${info.lanes.map((v, i) => `${POS_SHORT[i + 1]} ${Math.round(v * 100)}%`).join(' · ')}</span></div>
         <div class="bp-grid3">
           <div><h4>它克制的 <span class="hint">对位胜率</span></h4>${list(info.good, pct)}</div>
@@ -238,7 +260,11 @@ function render() {
   <div class="card">
     <div class="card-head"><h3>英雄 <span class="hint">当前模式：${{ ally: '放入我方', enemy: '放入敌方', ban: '禁用', view: '查询' }[bp.mode]}</span></h3><input type="search" id="bp-q" placeholder="搜索英雄" value="${esc(bp.q)}"></div>
     <div class="bp-heroes">${grid}</div>
-    <p class="hint" style="margin-top:10px">数据：${esc(D.source)}，截止 ${esc(D.updated)}。对位 / 同队胜率来自天梯传奇到冠绝分段，内战里仅作参考。</p>
+    <div class="bp-src hint" style="margin-top:10px">克制数据源：
+      <label class="inline"><input type="radio" name="bp-src" value="stratz" ${bp.src !== 'od' ? 'checked' : ''}> STRATZ 天梯（传奇-冠绝，截止 ${esc(D.updated)}）</label>
+      <label class="inline"><input type="radio" name="bp-src" value="od" ${bp.src === 'od' ? 'checked' : ''}> OpenDota 职业比赛${OD ? `（截止 ${esc(OD.updated)}）` : ''}</label>
+      <span>${useOd() ? '职业比赛样本小，冷门对位只有几场，胜率已按场次向 50% 收缩；配合分仍用 STRATZ。' : `同队胜率 / 配合率只有 STRATZ 有；OpenDota 源只替换克制维度。`}</span>
+    </div>
   </div>`;
   const qi = $('#bp-q'); if (qi && document.activeElement !== qi && bp._qFocus) { qi.focus(); qi.setSelectionRange(qi.value.length, qi.value.length); }
 }
@@ -266,6 +292,11 @@ function render() {
   root.addEventListener('change', e => {
     const el = e.target;
     if (el.id === 'bp-wide') { bp.wide = el.checked; persist(); render(); return; }
+    if (el.name === 'bp-src') {
+      const v = el.value;
+      if (v === 'od' && !OD) { el.disabled = true; ensureOd().then(() => { bp.src = 'od'; persist(); render(); }).catch(err => { toast('加载 OpenDota 对位数据失败：' + err.message + '（先跑 scripts/fetch-opendota-matchups.mjs 生成 bp-data-od.json）', 'err'); render(); }); return; }
+      bp.src = v; persist(); render(); return;
+    }
     const slot = el.closest('.bp-slot'); if (!slot) return;
     const side = slot.dataset.side, pos = Number(slot.dataset.pos);
     if (el.dataset.act === 'pid') {
