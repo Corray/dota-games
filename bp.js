@@ -31,7 +31,7 @@ const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(bp)); } c
 // ============ 数据 ============
 function ensureData() {
   if (D) return Promise.resolve(D);
-  if (!loading) loading = fetch('bp-data.json', { cache: 'force-cache' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+  if (!loading) loading = fetch('bp-data.json', { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(d => { D = d; idx = new Map(d.heroes.map((id, i) => [id, i])); return d; })
     .catch(e => { loading = null; throw e; });
   return loading;
