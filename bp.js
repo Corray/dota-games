@@ -162,6 +162,7 @@ function placeHero(id, side, pos) {
   if (pos < 0) return toast(side === 'ally' ? '我方已满 5 人' : '敌方已满 5 人', 'err');
   bp[side][pos].hero = id; bp[side][pos].auto = auto;
   if (auto) autoAssign(side);
+  if (bp.target && bp[bp.target.side][bp.target.pos].hero) bp.target = null;
 }
 function removeHero(id) {
   for (const side of ['ally', 'enemy']) bp[side].forEach(s => { if (s.hero === id) s.hero = null; });
@@ -176,7 +177,8 @@ function whereIs(id) {
 function onHeroClick(id) {
   if (bp.mode === 'view') { bp.focus = id; persist(); render(); return; }
   if (!has(id)) return toast('这个英雄还没有对位数据', 'err');
-  if (whereIs(id)) removeHero(id); else placeHero(id, bp.mode, null);
+  if (bp.target && !whereIs(id)) { placeHero(id, bp.target.side, bp.target.pos); bp.target = null; }
+  else if (whereIs(id)) removeHero(id); else placeHero(id, bp.mode, null);
   persist(); render();
 }
 
@@ -197,10 +199,11 @@ function render() {
   const slotHtml = (side, s, i) => {
     const p = s.pid ? P.get(s.pid) : null;
     const l = s.hero ? lanes(s.hero) : null;
-    return `<div class="bp-slot ${s.hero ? 'filled' : ''}" data-side="${side}" data-pos="${i}">
+    const isTarget = bp.target && bp.target.side === side && bp.target.pos === i;
+    return `<div class="bp-slot ${s.hero ? 'filled' : 'empty'} ${isTarget ? 'target' : ''}" data-side="${side}" data-pos="${i}" ${s.hero ? '' : 'title="点一下选中这个位置，再点下方英雄就放到这里"'}>
       <span class="pos-chip" title="${POS_NAME[i + 1]}">${POS_SHORT[i + 1]}</span>
-      <span class="bp-slot-hero">${s.hero ? esc(hname(s.hero)) : '<span class="hint">空位</span>'}${l ? `<span class="hint" title="该英雄在此号位的出场率（STRATZ）"> ${Math.round(l[i] * 100)}%</span>` : ''}</span>
-      ${s.hero ? `<select data-act="move" title="换到别的号位">${[0, 1, 2, 3, 4].map(k => `<option value="${k}" ${k === i ? 'selected' : ''}>${POS_SHORT[k + 1]}</option>`).join('')}</select>` : ''}
+      <span class="bp-slot-hero">${s.hero ? esc(hname(s.hero)) : `<span class="hint">${isTarget ? '← 点下方英雄放到这里' : '空位'}</span>`}${l ? `<span class="hint" title="该英雄在此号位的出场率（STRATZ）"> ${Math.round(l[i] * 100)}%</span>` : ''}</span>
+      ${s.hero ? `<label class="bp-move hint">换位 <select data-act="move" title="把这个英雄换到别的号位（对方位置上的英雄会互换）">${[0, 1, 2, 3, 4].map(k => `<option value="${k}" ${k === i ? 'selected' : ''}>${POS_SHORT[k + 1]}</option>`).join('')}</select></label>` : ''}
       <select data-act="pid" title="绑定名单里的选手：推荐 / 禁用会优先用他的擅长英雄"><option value="">选手…</option>${players.map(x => `<option value="${x.id}" ${x.id === s.pid ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
       ${s.hero ? `<button type="button" class="slot-remove" data-act="rm" title="移出">×</button>` : ''}
       ${p && p.heroes.length ? `<div class="bp-slot-pool hint">${p.heroes.map(h => { const id = Number(Object.keys(HERO_BY_ID).find(k => HERO_BY_ID[k] === h)); const w = id ? whereIs(id) : null; return `<button type="button" class="mini ${w ? 'used' : ''}" data-act="quick" data-hero="${id || ''}" ${!id || !has(id) ? 'disabled' : ''} title="${w ? '已在阵容 / 禁用里' : '放到这个位置'}">${esc(h)}</button>`; }).join('')}</div>` : ''}
@@ -250,6 +253,7 @@ function render() {
       <div class="card">
         <div class="card-head"><h2>阵容</h2><div class="inline-actions"><button type="button" class="ghost" data-act="swap" title="我方 / 敌方互换">交换</button><button type="button" class="ghost" data-act="reset">清空</button></div></div>
         <div class="bp-modes"><span class="hint">点英雄放入：</span>${modeBtn('ally', '我方', 'ally')}${modeBtn('enemy', '敌方', 'enemy')}${modeBtn('ban', '禁用', 'ban')}${modeBtn('view', '查询', '')}</div>
+        <p class="hint" style="margin:-6px 0 10px">号位默认按出场率自动排；想指定位置，先点一个空位再点英雄，或用已放入英雄旁的「换位」。</p>
         <div class="bp-side ally"><div class="bp-side-head">我方</div>${bp.ally.map((s, i) => slotHtml('ally', s, i)).join('')}</div>
         <div class="bp-side enemy"><div class="bp-side-head">敌方 <span class="hint">位置按出场率猜，可手动改</span></div>${bp.enemy.map((s, i) => slotHtml('enemy', s, i)).join('')}</div>
         <div class="bp-bans"><span class="hint">已禁用：</span>${bp.bans.length ? bp.bans.map(id => `<button type="button" class="mini" data-act="hero" data-hero="${id}" title="点击撤销">${esc(hname(id))} ×</button>`).join('') : '<span class="hint">无</span>'}</div>
@@ -274,6 +278,13 @@ function render() {
   const root = $('#bp-root'); if (!root) return;
   root.addEventListener('click', e => {
     const mb = e.target.closest('.bp-mode'); if (mb) { bp.mode = mb.dataset.mode; if (bp.mode !== 'view') bp.focus = null; persist(); render(); return; }
+    const emptySlot = e.target.closest('.bp-slot.empty');
+    if (emptySlot && !e.target.closest('select,button')) {
+      const side = emptySlot.dataset.side, pos = Number(emptySlot.dataset.pos);
+      bp.target = bp.target && bp.target.side === side && bp.target.pos === pos ? null : { side, pos };
+      if (bp.target && bp.mode === 'view') bp.mode = side;
+      persist(); render(); return;
+    }
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const act = b.dataset.act; const id = Number(b.dataset.hero) || null;
     if (act === 'hero') onHeroClick(id);
