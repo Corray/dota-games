@@ -222,6 +222,7 @@
         <option value="pool">英雄池广度</option>
         <option value="both">两者各半</option>
       </select>
+      <label class="inline" title="对局质量修正：按双方击杀差调整 Elo 步长。0 分差 ×0.7、20 分差 ×1.0、40+ 分差 ×1.3——碾压局说明实力差距明确，多加多扣；胶着局说明接近，少动。没有比分的比赛按 ×1.0"><input type="checkbox" id="sw-mov"> 比分差修正</label>
       <label class="inline" title="样本置信度 = 场次 ÷ (场次 + 可信场次)。打到这个场次时 KDA / 英雄两项只信一半，其余向中性 0.5 收缩；场次越多越信自己的数据，没有硬阈值跳变">可信场次<input id="sw-trust" type="number" min="1" max="99"></label>
       <button type="button" class="ghost" id="sw-reset">重置默认</button>
       <span class="hint" id="sw-sum"></span>

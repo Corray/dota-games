@@ -112,21 +112,37 @@ function save() {
 }
 
 // ============ 统计计算 ============
+/* 比分：新导入的比赛存在 m.score，老数据只有备注里的「比分 40:21」；0:0 是 Steam 没给比分的占位，视为未知 */
+function matchScore(m) {
+  let a, b;
+  if (Array.isArray(m.score) && m.score.length === 2) [a, b] = m.score.map(Number);
+  else { const mt = /比分 (\d+):(\d+)/.exec(m.note || ''); if (mt) { a = Number(mt[1]); b = Number(mt[2]); } }
+  if (!Number.isFinite(a) || !Number.isFinite(b) || (!a && !b)) return null;
+  return [a, b];
+}
+const CLOSE_MARGIN = 5;    // 双方击杀差 ≤ 5 记为胶着局
+// 比分差 → Elo 步长系数：0 分差 0.7，20 分差 1.0，40+ 分差 1.3。碾压说明实力差距明确，多加多扣；胶着说明接近，少动
+const movFactor = sc => sc ? 0.7 + 0.6 * Math.min(Math.abs(sc[0] - sc[1]), 40) / 40 : 1;
+
 function computeStats(matches) {
+  const so = loadScoreOpt();
+  const useMov = so.mov !== false;
   const ps = {}, heroes = {}, duos = {};
   let radiantWins = 0, durSum = 0, durN = 0;
   const sorted = [...matches].sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || 0) - (b.createdAt || 0));
-  const getP = pid => ps[pid] ||= { pid, g: 0, w: 0, rg: 0, rw: 0, dg: 0, dw: 0, pos: {}, heroes: {}, mates: {}, opps: {}, streak: 0, results: [], k: 0, d: 0, a: 0, kdaG: 0, kdaPosN: {} };
+  const getP = pid => ps[pid] ||= { pid, g: 0, w: 0, rg: 0, rw: 0, dg: 0, dw: 0, pos: {}, heroes: {}, mates: {}, opps: {}, streak: 0, results: [], k: 0, d: 0, a: 0, kdaG: 0, kdaPosN: {}, closeG: 0, closeW: 0 };
   const posKda = {};   // 各号位的 KDA 基线：{ pos: { ka, d, n } }，0 = 未填号位
   for (const m of sorted) {
     if (m.winner === 'radiant') radiantWins++;
     if (m.duration) { durSum += m.duration; durN++; }
+    const sc = matchScore(m), close = !!sc && Math.abs(sc[0] - sc[1]) <= CLOSE_MARGIN;
     for (const side of ['radiant', 'dire']) {
       const won = m.winner === side;
       const team = m[side] || [], other = m[side === 'radiant' ? 'dire' : 'radiant'] || [];
       for (const s of team) {
         const st = getP(s.pid);
         st.g++; if (won) st.w++;
+        if (close) { st.closeG++; if (won) st.closeW++; }
         if (side === 'radiant') { st.rg++; if (won) st.rw++; } else { st.dg++; if (won) st.dw++; }
         if (s.kda) {
           st.k += s.kda[0]; st.d += s.kda[1]; st.a += s.kda[2]; st.kdaG++;
@@ -160,8 +176,9 @@ function computeStats(matches) {
     const ra = rad.reduce((s, x) => s + R(x), 0) / rad.length, rb = dire.reduce((s, x) => s + R(x), 0) / dire.length;
     const ea = 1 / (1 + 10 ** ((rb - ra) / 400));
     const sa = m.winner === 'radiant' ? 1 : 0;
-    for (const x of rad) elo[x] = R(x) + ELO_K * (sa - ea);
-    for (const x of dire) elo[x] = R(x) + ELO_K * ((1 - sa) - (1 - ea));
+    const k = ELO_K * (useMov ? movFactor(matchScore(m)) : 1);
+    for (const x of rad) elo[x] = R(x) + k * (sa - ea);
+    for (const x of dire) elo[x] = R(x) + k * ((1 - sa) - (1 - ea));
   }
   // ---- 相对 KDA：自己的 KDA ÷ 同号位平均 KDA（按自己各号位场次加权）。辅助天然 KDA 低，不该和核心混算 ----
   const allB = Object.values(posKda).reduce((o, b) => ({ ka: o.ka + b.ka, d: o.d + b.d, n: o.n + b.n }), { ka: 0, d: 0, n: 0 });
@@ -188,7 +205,7 @@ const topKey = (obj, by = 'g') => Object.entries(obj).sort((a, b) => b[1][by] - 
    之所以向 0.5 而不是向段位收缩：向段位收缩会让 0 场的冠绝拿满分、压过 30 场 60% 胜率的冠绝，本末倒置 */
 const SCORE_KEY = 'dota-score-weights-v2';
 const SCORE_KEY_V1 = 'dota-score-weights-v1';
-const SCORE_DEF = { wRank: 40, wElo: 30, wKda: 20, wHero: 10, trust: 3, heroMode: 'main', heroTop: 3, poolCap: 12 };
+const SCORE_DEF = { wRank: 40, wElo: 30, wKda: 20, wHero: 10, trust: 3, heroMode: 'main', heroTop: 3, poolCap: 12, mov: true };
 const ELO_BASE = 1500, ELO_K = 32;
 /* 段位归一的分母。最高档「冠绝一世」不分星级（rankIdx 恒为 70），
    写死 75 会让最高段永远只拿 93.3% 的段位分，所以按最高档的档位值取 */
@@ -233,7 +250,7 @@ function playerScore(st, p, opt) {
   const wsum = (o.wRank + o.wElo + o.wKda + o.wHero) || 1;
   const raw = (o.wRank * rank + o.wElo * elo + o.wKda * kda + o.wHero * hero) / wsum;
   const win = g ? st.w / g : null;
-  return { score: raw * 100, raw, rank, elo, eloRaw, kda, kdaRaw, kdaRel: st?.kdaRel ?? null, kdaExp: st?.kdaExp ?? null, hero, win, conf, enough: conf >= 0.5, g };
+  return { score: raw * 100, raw, rank, elo, eloRaw, kda, kdaRaw, kdaRel: st?.kdaRel ?? null, kdaExp: st?.kdaExp ?? null, hero, win, conf, enough: conf >= 0.5, g, closeG: st?.closeG || 0, closeW: st?.closeW || 0 };
 }
 
 // ============ Tab 切换 ============
@@ -733,6 +750,7 @@ let lastStatsRows = [];
     o[key] = key === 'heroMode' ? e.target.value : Math.max(key === 'trust' ? 1 : 0, Number(e.target.value) || 0);
     saveScoreOpt(o); renderStats();
   }));
+  $('#sw-mov').addEventListener('change', e => { const o = loadScoreOpt(); o.mov = e.target.checked; saveScoreOpt(o); renderStats(); });
   $('#sw-reset').addEventListener('click', () => { saveScoreOpt({ ...SCORE_DEF }); renderStats(); toast('评分权重已重置'); });
   $('#stats-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#duo-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
@@ -765,7 +783,7 @@ const scoreTip = sc => {
   const part = (label, w, v, note = '') => `${label} ${(v * 100).toFixed(0)}分 ×${w} → ${(w * v / wsum * 100).toFixed(1)}${note ? '　' + note : ''}`;
   return [
     part('段位', o.wRank, sc.rank),
-    part('对手加权', o.wElo, sc.elo, `Elo ${Math.round(sc.eloRaw)}${sc.win != null ? ` · 胜率 ${(sc.win * 100).toFixed(0)}%` : ''}`),
+    part('对手加权', o.wElo, sc.elo, `Elo ${Math.round(sc.eloRaw)}${sc.win != null ? ` · 胜率 ${(sc.win * 100).toFixed(0)}%` : ''}${sc.closeG ? ` · 胶着局 ${sc.closeW}/${sc.closeG}` : ''}${o.mov === false ? ' · 未用比分差修正' : ''}`),
     part('KDA', o.wKda, sc.kda, sc.kdaRel != null ? `${sc.kdaRaw.toFixed(2)}，同号位平均 ${sc.kdaExp.toFixed(2)} 的 ${sc.kdaRel.toFixed(2)} 倍` : '无 KDA 记录'),
     part('英雄', o.wHero, sc.hero),
     `样本置信 ${(sc.conf * 100).toFixed(0)}%（${sc.g} 场，可信场次 ${o.trust}）${sc.conf < 0.5 ? '，KDA / 英雄向中性收缩' : ''}`,
@@ -779,7 +797,7 @@ function renderStats() {
   const minG = Math.max(1, Number($('#sf-min').value) || 1);
   const so = loadScoreOpt();
   $('#sw-rank').value = so.wRank; $('#sw-elo').value = so.wElo; $('#sw-kda').value = so.wKda; $('#sw-hero').value = so.wHero;
-  $('#sw-mode').value = so.heroMode; $('#sw-trust').value = so.trust;
+  $('#sw-mode').value = so.heroMode; $('#sw-trust').value = so.trust; $('#sw-mov').checked = so.mov !== false;
   $('#sw-sum').textContent = `权重和 ${so.wRank + so.wElo + so.wKda + so.wHero}（按比例归一，不必凑 100）`;
 
   // 概览
@@ -1527,6 +1545,7 @@ function importParsedMatch(parsed, { leagueId, autoNew }) {
   const radiant = side(parsed.radiant), dire = side(parsed.dire);
   if (!radiant.length || !dire.length) throw new Error('两队都没有可识别的选手（未勾选自动新建）');
   const match = { id: parsed.id, date: parsed.date, duration: parsed.duration, note: `联赛 ${leagueId} 导入 · 比分 ${parsed.score.join(':')}`, radiant, dire, winner: parsed.winner, createdAt: Date.now(), leagueId: Number(leagueId) };
+  if (parsed.score.every(x => Number.isFinite(Number(x)))) match.score = parsed.score.map(Number);
   const i = state.matches.findIndex(m => m.id === match.id);
   if (i >= 0) state.matches[i] = { ...match, createdAt: state.matches[i].createdAt }; else state.matches.push(match);
   return { created };
