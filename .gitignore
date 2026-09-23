@@ -1,3 +1,5 @@
 .playwright-mcp/
 .DS_Store
 shot-*.png
+# 完整数据备份含 Steam ID / 备注 / 赛事，存私有仓库 Corray/dota-games-backup，不进公有仓库
+dota-records-*.json
