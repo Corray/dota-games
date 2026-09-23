@@ -16,4 +16,4 @@ compatibility_date = "2025-06-01"
 # 3. 部署：npx wrangler deploy
 [[kv_namespaces]]
 binding = "DB"
-id = "填入 kv namespace create 打印的 id"
+id = "7e112ee433ed4236a535a14a59d5a31d"
