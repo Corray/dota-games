@@ -91,9 +91,9 @@
           <div class="inline-actions"><button type="button" id="btn-recalc" title="根据每个人的比赛记录，重新算出常打位置和常用英雄，预览后再应用">按战绩重算位置 / 英雄</button><input id="player-search" type="search" placeholder="搜索昵称 / 段位 / 英雄"></div>
         </div>
         <div class="table-wrap">
-          <table class="tbl" id="player-table">
+          <table class="tbl sortable" id="player-table">
             <thead><tr>
-              <th>昵称</th><th>段位</th><th>位置</th><th>擅长英雄</th><th class="num">场次</th><th class="num">胜率</th><th></th>
+              <th data-key="name">昵称</th><th data-key="rank">段位</th><th>位置</th><th>擅长英雄</th><th data-key="score" class="num" title="段位 / 对手加权(Elo) / 相对 KDA / 英雄 四项加权，0-100。悬停看拆解，权重在「统计」页调">评分</th><th data-key="g" class="num">场次</th><th data-key="wr" class="num">胜率</th><th></th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -214,15 +214,15 @@
     <div class="score-cfg">
       <span class="field-label">评分权重</span>
       <label class="inline">段位<input id="sw-rank" type="number" min="0" max="100"></label>
-      <label class="inline">胜率<input id="sw-win" type="number" min="0" max="100"></label>
-      <label class="inline">KDA<input id="sw-kda" type="number" min="0" max="100"></label>
+      <label class="inline" title="Elo 对手加权：按时间逐场更新，赢强队加得多、输弱队扣得多，比裸胜率多看了对手是谁">对手加权<input id="sw-elo" type="number" min="0" max="100"></label>
+      <label class="inline" title="相对同号位平均 KDA 的倍数，辅助和核心各比各的；等于平均记 50 分，2 倍封顶">KDA<input id="sw-kda" type="number" min="0" max="100"></label>
       <label class="inline">英雄<input id="sw-hero" type="number" min="0" max="100"></label>
       <select id="sw-mode" title="「常用英雄」这一项怎么算">
         <option value="main">主力英雄战绩</option>
         <option value="pool">英雄池广度</option>
         <option value="both">两者各半</option>
       </select>
-      <label class="inline" title="场次低于此数的选手，胜率 / KDA / 英雄分一律按中性值 0.5 计，避免 1 场 1 胜刷满分">可信场次<input id="sw-trust" type="number" min="1" max="99"></label>
+      <label class="inline" title="样本置信度 = 场次 ÷ (场次 + 可信场次)。打到这个场次时 KDA / 英雄两项只信一半，其余向中性 0.5 收缩；场次越多越信自己的数据，没有硬阈值跳变">可信场次<input id="sw-trust" type="number" min="1" max="99"></label>
       <button type="button" class="ghost" id="sw-reset">重置默认</button>
       <span class="hint" id="sw-sum"></span>
     </div>
@@ -231,7 +231,7 @@
         <thead><tr>
           <th data-key="name">选手</th>
           <th data-key="rank">段位</th>
-          <th data-key="score" class="num" title="段位 / 胜率 / KDA / 常用英雄 四项按权重加权，0-100">评分</th>
+          <th data-key="score" class="num" title="段位 / 对手加权(Elo) / 相对 KDA / 常用英雄 四项按权重加权，0-100">评分</th>
           <th data-key="g" class="num">场次</th>
           <th data-key="w" class="num">胜</th>
           <th data-key="l" class="num">负</th>

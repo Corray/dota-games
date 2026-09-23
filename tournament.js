@@ -252,7 +252,7 @@ function advancing(st, t) {
 function strengthScores(pids, opt) {
   const P = playerMap();
   const stats = A.computeStats(S().matches).players;
-  const o = { wRank: opt.wRank, wWin: opt.wWin, wKda: opt.wKda, wHero: opt.wHero || 0, trust: opt.minGames, heroMode: opt.heroMode || 'main' };
+  const o = { wRank: opt.wRank, wElo: opt.wElo, wKda: opt.wKda, wHero: opt.wHero || 0, trust: opt.minGames, heroMode: opt.heroMode || 'main' };
   return new Map(pids.map(pid => {
     const p = P.get(pid);
     const r = A.playerScore(stats[pid], p, o);
@@ -295,7 +295,7 @@ function openBalanceModal(t) {
   const subSet = new Set(t.subs || []);
   const free = rosterPlayers(t).filter(p => !assigned.includes(p.id) && !subSet.has(p.id)).map(p => p.id);
   const readOpt = () => ({
-    wRank: Number($('#bl-w-rank').value) || 0, wWin: Number($('#bl-w-win').value) || 0, wKda: Number($('#bl-w-kda').value) || 0, wHero: Number($('#bl-w-hero').value) || 0,
+    wRank: Number($('#bl-w-rank').value) || 0, wElo: Number($('#bl-w-elo').value) || 0, wKda: Number($('#bl-w-kda').value) || 0, wHero: Number($('#bl-w-hero').value) || 0,
     minGames: Number($('#bl-min').value) || 1, positions: $('#bl-pos').checked, includeFree: $('#bl-free').checked, k: Math.max(2, Number($('#bl-k').value) || 2),
   });
   let result = null;
@@ -317,10 +317,10 @@ function openBalanceModal(t) {
     <div class="row wrap" style="margin-top:8px">
       <label class="narrow">队伍数<input type="number" id="bl-k" min="2" max="32" value="${Math.max(2, t.teams.length || Math.floor((assigned.length + free.length) / 5) || 2)}"></label>
       <label class="narrow">段位权重<input type="number" id="bl-w-rank" min="0" max="100" value="50"></label>
-      <label class="narrow">胜率权重<input type="number" id="bl-w-win" min="0" max="100" value="30"></label>
+      <label class="narrow" title="Elo 对手加权，同统计页评分口径">对手加权<input type="number" id="bl-w-elo" min="0" max="100" value="30"></label>
       <label class="narrow">KDA 权重<input type="number" id="bl-w-kda" min="0" max="100" value="20"></label>
       <label class="narrow" title="主力英雄战绩，与统计页「评分」同一口径；默认 0 表示不计入">英雄权重<input type="number" id="bl-w-hero" min="0" max="100" value="0"></label>
-      <label class="narrow" title="场次少于此数的选手，胜率 / KDA 按中性值算">最少场次<input type="number" id="bl-min" min="1" max="50" value="3"></label>
+      <label class="narrow" title="样本置信度的半衰场次：打到这个场次时 KDA / 英雄只信一半，其余向中性收缩">可信场次<input type="number" id="bl-min" min="1" max="50" value="3"></label>
     </div>
     <div class="inline-actions wrap" style="margin-bottom:8px">
       <label class="inline hint"><input type="checkbox" id="bl-free" ${assigned.length < 10 ? 'checked' : ''}> 把未分队的参赛选手（${free.length} 人，不含替补池）也加入分组</label>
