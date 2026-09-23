@@ -1,4 +1,4 @@
-/* Dota 2 内战记录 —— 纯静态单页，数据存 localStorage */
+/* Dota 2 内战记录 —— 纯静态单页。数据以 Cloudflare KV（经 worker/ 的 /data 路由）为准，所有设备共用；localStorage 只是本地缓存 + 离线兜底 */
 (() => {
 'use strict';
 
@@ -34,9 +34,23 @@ const getProxy = () => (localStorage.getItem(PROXY_KEY) ?? DEFAULT_PROXY).trim()
 /* ?share=xxx.json 打开时进入只读快照模式：数据从该 JSON 拉取而不是 localStorage，
    只留「统计」页签，所有写操作停掉。这样分享页和自己看到的是同一份渲染代码，
    统计口径不会出现两套。 */
-const SHARE_URL = new URLSearchParams(location.search).get('share');
+const SHARE_PARAM = new URLSearchParams(location.search).get('share');
+const SHARE_URL = SHARE_PARAM === 'cloud' ? `${getProxy()}/data?strip=1` : SHARE_PARAM;   // ?share=cloud：读云端实时脱敏快照，不用再手动发布 stats.json
 const READONLY = !!SHARE_URL;
 let shareMeta = null;
+
+// ============ 云同步（Cloudflare KV，经 Worker /data） ============
+/* 云端是唯一真相：启动先拉云端，本地 localStorage 只是缓存 + 断网兜底。
+   save() 照常写本地，并防抖 3 秒后把整份 state PUT 上去，带上读到的版本号做乐观锁；
+   版本对不上（另一台设备改过）→ 409 → 弹窗让人选哪边，绝不静默覆盖任何一边。 */
+const CLOUD_TOKEN_KEY = 'dota-cloud-token';    // 编辑口令（Worker secret EDIT_TOKEN），第一次推送时输入
+const CLOUD_VER_KEY = 'dota-cloud-version';    // 本地这份数据对应的云端版本号
+const CLOUD_DIRTY_KEY = 'dota-cloud-dirty';    // '1' = 本地有改动尚未推到云端（持久化，关页面再开也记得）
+const CLOUD_OFF_KEY = 'dota-cloud-off';        // '1' = 用户手动关闭云同步，纯本地模式
+const CLOUD_DEBOUNCE = 3000;
+const cloud = { version: Number(localStorage.getItem(CLOUD_VER_KEY)) || 0, updatedAt: null, status: 'idle', msg: '', timer: null, pushing: false, seq: 0 };
+const cloudUrl = (path = '') => { const p = getProxy(); return p ? `${p}/data${path}` : ''; };
+const cloudOn = () => !READONLY && localStorage.getItem(CLOUD_OFF_KEY) !== '1' && !!cloudUrl();
 
 // ============ 状态 ============
 let state = READONLY ? { players: [], matches: [], tournaments: [] } : load();
@@ -86,7 +100,15 @@ function load() {
   } catch (e) { console.warn('读取本地数据失败', e); }
   return { players: [], matches: [], tournaments: [] };
 }
-function save() { if (READONLY) return; localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function save() {
+  if (READONLY) return;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!cloudOn()) return;
+  localStorage.setItem(CLOUD_DIRTY_KEY, '1'); cloud.seq++;
+  setCloudStatus('pending', '有改动待同步');
+  clearTimeout(cloud.timer);
+  cloud.timer = setTimeout(cloudPush, CLOUD_DEBOUNCE);
+}
 
 // ============ 统计计算 ============
 function computeStats(matches) {
@@ -1482,25 +1504,26 @@ $('#btn-publish')?.addEventListener('click', () => {
     <p class="hint">别人打开这个链接只能看统计，改不了任何数据，也不会影响他自己的本地记录。</p>`);
 });
 
-$('#btn-export').addEventListener('click', () => {
+function exportBackup() {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }));
   a.download = `dota-records-${today()}.json`; a.click(); URL.revokeObjectURL(a.href);
   toast('已导出', 'ok');
-});
+}
+$('#btn-export').addEventListener('click', exportBackup);
 $('#btn-import').addEventListener('click', () => $('#file-import').click());
 $('#file-import').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
   try {
     const d = JSON.parse(await f.text());
     if (!Array.isArray(d.players) || !Array.isArray(d.matches)) throw new Error('格式不对');
-    if (!confirm(`导入 ${d.players.length} 名选手、${d.matches.length} 场比赛、${(d.tournaments || []).length} 个赛事，将覆盖当前数据（${state.players.length} 人 / ${state.matches.length} 场 / ${(state.tournaments || []).length} 个赛事）。继续？`)) return;
+    if (!confirm(`导入 ${d.players.length} 名选手、${d.matches.length} 场比赛、${(d.tournaments || []).length} 个赛事，将覆盖当前数据（${state.players.length} 人 / ${state.matches.length} 场 / ${(state.tournaments || []).length} 个赛事）${cloudOn() ? '，并同步覆盖云端' : ''}。继续？`)) return;
     state = { players: d.players, matches: d.matches, tournaments: Array.isArray(d.tournaments) ? d.tournaments : [] }; save(); resetPlayerForm(); resetMatchForm(); renderAll(); toast('导入成功', 'ok');
   } catch (err) { toast('导入失败：' + err.message, 'err'); }
   e.target.value = '';
 });
 $('#btn-demo').addEventListener('click', () => {
-  if ((state.players.length || state.matches.length) && !confirm('载入示例数据会覆盖当前全部数据，继续？')) return;
+  if ((state.players.length || state.matches.length) && !confirm(`载入示例数据会覆盖当前全部数据${cloudOn() ? '，并同步覆盖云端（所有设备都会变成示例数据）' : ''}，继续？`)) return;
   state = demoData(); save(); resetPlayerForm(); resetMatchForm(); renderAll(); toast('已载入示例数据', 'ok');
 });
 
@@ -1532,6 +1555,165 @@ function demoData() {
   return { players, matches, tournaments: [] };
 }
 
+// ============ 云同步实现 ============
+const CLOUD_LABEL = { off: '云同步已关', idle: '云端', pending: '待同步', syncing: '同步中…', ok: '已同步', err: '同步失败', conflict: '有冲突', notoken: '需要口令' };
+function setCloudStatus(status, msg = '') {
+  cloud.status = status; cloud.msg = msg;
+  const el = $('#cloud-status'); if (!el) return;
+  el.className = 'cloud-status ' + status;
+  el.textContent = '☁ ' + (CLOUD_LABEL[status] || status);
+  const ver = cloud.version ? `云端版本 v${cloud.version}${cloud.updatedAt ? ' · ' + new Date(cloud.updatedAt).toLocaleString('zh-CN') : ''}` : '';
+  el.title = [msg, ver, '点击查看云同步设置'].filter(Boolean).join('\n');
+}
+const persistLocal = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+function setCloudVersion(v, at) { cloud.version = v; cloud.updatedAt = at || null; localStorage.setItem(CLOUD_VER_KEY, String(v)); }
+const isDirty = () => localStorage.getItem(CLOUD_DIRTY_KEY) === '1';
+const setDirty = d => d ? localStorage.setItem(CLOUD_DIRTY_KEY, '1') : localStorage.removeItem(CLOUD_DIRTY_KEY);
+const hasData = d => !!((d.players || []).length || (d.matches || []).length || (d.tournaments || []).length);
+
+async function cloudFetch(path = '', opts = {}, ms = 20000) {
+  const c = new AbortController(); const t = setTimeout(() => c.abort(), ms);
+  try {
+    const r = await fetch(cloudUrl(path), { cache: 'no-store', ...opts, signal: c.signal });
+    let j = null; try { j = await r.json(); } catch { /* 非 JSON 响应，下面按状态码报 */ }
+    if (!r.ok) { const e = new Error(j?.error || `HTTP ${r.status}`); e.status = r.status; e.body = j; throw e; }
+    return j;
+  } catch (e) { if (e.name === 'AbortError') throw new Error(`超时 ${ms / 1000}s`); throw e; }
+  finally { clearTimeout(t); }
+}
+
+function askToken(reason = '') {
+  const cur = localStorage.getItem(CLOUD_TOKEN_KEY) || '';
+  const v = prompt(`${reason}${reason ? '\n' : ''}请输入云端编辑口令（部署 Worker 时 wrangler secret put EDIT_TOKEN 设的那个；只看不改不需要）：`, cur);
+  if (v == null) return null;
+  const clean = v.trim();
+  if (clean) localStorage.setItem(CLOUD_TOKEN_KEY, clean); else localStorage.removeItem(CLOUD_TOKEN_KEY);
+  return clean || null;
+}
+
+// 用云端数据替换本地：不标 dirty、不触发推送
+function adoptRemote(d, version, updatedAt) {
+  state = { players: d.players || [], matches: d.matches || [], tournaments: Array.isArray(d.tournaments) ? d.tournaments : [] };
+  persistLocal(); setCloudVersion(version, updatedAt); setDirty(false);
+  clearTimeout(cloud.timer); cloud.timer = null;
+  resetPlayerForm(); resetMatchForm(); renderAll();
+}
+
+async function cloudPush() {
+  clearTimeout(cloud.timer); cloud.timer = null;
+  if (!cloudOn() || cloud.pushing) return;
+  let token = localStorage.getItem(CLOUD_TOKEN_KEY);
+  if (!token) {
+    setCloudStatus('notoken', '本地有改动，需要编辑口令才能同步到云端');
+    token = askToken('本地改动需要同步到云端。');
+    if (!token) { toast('未输入口令，改动只保存在本地；点顶栏「☁」可随时补', 'err'); return; }
+  }
+  const seq = cloud.seq;
+  cloud.pushing = true; setCloudStatus('syncing');
+  try {
+    const r = await cloudFetch('', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Edit-Token': token, 'X-Base-Version': String(cloud.version) },
+      body: JSON.stringify(state),
+    }, 60000);
+    setCloudVersion(r.version, r.updatedAt);
+    if (cloud.seq === seq) { setDirty(false); setCloudStatus('ok'); }   // 推送期间又有新改动：dirty 留着，定时器会再推一次
+  } catch (e) {
+    if (e.status === 409) { setCloudStatus('conflict', e.message); await resolveConflict(); }
+    else if (e.status === 401) { setCloudStatus('notoken', e.message); localStorage.removeItem(CLOUD_TOKEN_KEY); toast('云端编辑口令不正确，点顶栏「☁」重新输入', 'err'); }
+    else { setCloudStatus('err', e.message); toast(`同步到云端失败：${e.message}。改动已留在本地，30 秒后自动重试`, 'err'); cloud.timer = setTimeout(cloudPush, 30000); }
+  } finally { cloud.pushing = false; }
+}
+
+// 两边都改过：拉云端全量，摆出两边概况让人选。无论选哪边都能先导出本地备份
+async function resolveConflict(prefetched = null) {
+  let r = prefetched;
+  if (!r) { try { r = await cloudFetch(''); } catch (e) { setCloudStatus('err', e.message); toast('拉取云端数据失败：' + e.message, 'err'); return; } }
+  const d = r.data || { players: [], matches: [], tournaments: [] };
+  const when = r.updatedAt ? new Date(r.updatedAt).toLocaleString('zh-CN') : '未知';
+  showModal(`<h2>云端数据有更新</h2>
+    <p class="hint">另一台设备在你本地改动之后更新了云端（版本 v${r.version} · ${esc(when)}），两边都有改动，需要你决定保留哪边。被覆盖的那边会丢失，建议先导出本地备份。</p>
+    <table class="cloud-cmp"><tr><th></th><th>本地</th><th>云端</th></tr>
+      <tr><td>选手</td><td>${state.players.length}</td><td>${(d.players || []).length}</td></tr>
+      <tr><td>比赛</td><td>${state.matches.length}</td><td>${(d.matches || []).length}</td></tr>
+      <tr><td>赛事</td><td>${(state.tournaments || []).length}</td><td>${(d.tournaments || []).length}</td></tr></table>
+    <div class="form-actions">
+      <button id="cf-export" class="ghost" type="button">先导出本地备份</button>
+      <button id="cf-remote" type="button">用云端覆盖本地</button>
+      <button id="cf-local" class="danger" type="button">用本地覆盖云端</button>
+    </div>`);
+  $('#cf-export').onclick = exportBackup;
+  $('#cf-remote').onclick = () => { adoptRemote(d, r.version, r.updatedAt); hideModal(); setCloudStatus('ok'); toast('已切换为云端数据', 'ok'); };
+  $('#cf-local').onclick = () => {
+    if (!confirm(`确定用本地数据覆盖云端 v${r.version}？云端那份会丢失。`)) return;
+    setCloudVersion(r.version, r.updatedAt); setDirty(true); cloud.seq++; hideModal(); cloudPush();
+  };
+}
+
+// 启动 / 重新可见 / 手动点击时拉云端，按四种情况处理
+async function cloudPull({ silent = false } = {}) {
+  if (!cloudOn()) { setCloudStatus('off'); return; }
+  setCloudStatus('syncing');
+  let r;
+  try { r = await cloudFetch(''); }
+  catch (e) { setCloudStatus('err', e.message); if (!silent) toast(`连接云端失败：${e.message}，当前使用本地数据`, 'err'); return; }
+  cloud.updatedAt = r.updatedAt;
+  const remote = r.data || { players: [], matches: [], tournaments: [] };
+  // 本地版本号为 0 但有数据 = 升级前的老用户或从没同步过，来源不明，一律当作有未同步改动，不能静默丢
+  const localChanged = isDirty() || (cloud.version === 0 && hasData(state));
+
+  if (!hasData(remote)) {                       // 云端空：本地有就上传做初始版本
+    setCloudVersion(r.version, r.updatedAt);
+    if (hasData(state)) { setDirty(true); cloud.seq++; toast('云端还没有数据，正在上传本地数据作为初始版本…'); return cloudPush(); }
+    setDirty(false); setCloudStatus('ok', '云端和本地都还没有数据'); return;
+  }
+  if (r.version === cloud.version) {            // 云端没变：本地有欠推的就推，否则一致
+    if (isDirty()) return cloudPush();
+    setCloudStatus('ok'); return;
+  }
+  if (!localChanged) {                          // 云端更新、本地干净：直接采用
+    adoptRemote(remote, r.version, r.updatedAt); setCloudStatus('ok');
+    if (!silent) toast(`已从云端加载最新数据（v${r.version}）`, 'ok');
+    return;
+  }
+  setCloudStatus('conflict', '云端与本地都有改动');
+  await resolveConflict(r);
+}
+
+// 切回页面时用 /data/meta 轻量探测（几十字节），有变化才拉全量
+async function cloudCheck() {
+  if (!cloudOn() || cloud.pushing || document.hidden) return;
+  try { const m = await cloudFetch('/meta', {}, 8000); if (m.version !== cloud.version) await cloudPull(); }
+  catch { /* 探测失败不打扰，下次再试 */ }
+}
+
+function openCloudSettings() {
+  const on = localStorage.getItem(CLOUD_OFF_KEY) !== '1';
+  const hasToken = !!localStorage.getItem(CLOUD_TOKEN_KEY);
+  const shareLink = `${location.origin}${location.pathname}?share=cloud`;
+  showModal(`<h2>云同步</h2>
+    <p class="hint">数据存在 Cloudflare Worker 的 KV 里，所有设备打开同一个网址看到的是同一份，本地浏览器只是缓存。中转地址：<code>${esc(getProxy() || '（未配置，云同步不可用）')}</code>，可在「记录比赛」页的中转设置里改。</p>
+    <p class="hint">当前：<b>${esc(CLOUD_LABEL[cloud.status] || cloud.status)}</b>${cloud.msg ? ' · ' + esc(cloud.msg) : ''}${cloud.version ? ` · 云端版本 v${cloud.version}` : ''}${cloud.updatedAt ? ' · ' + esc(new Date(cloud.updatedAt).toLocaleString('zh-CN')) : ''}${isDirty() ? ' · <b>本地有未同步改动</b>' : ''}</p>
+    <div class="form-actions">
+      <button id="cs-pull" type="button">从云端拉取</button>
+      <button id="cs-push" type="button" ${isDirty() ? '' : 'class="ghost"'}>推送本地到云端</button>
+      <button id="cs-token" type="button" class="ghost">${hasToken ? '修改' : '设置'}编辑口令</button>
+      <button id="cs-toggle" type="button" class="ghost">${on ? '关闭云同步（纯本地）' : '开启云同步'}</button>
+    </div>
+    <p class="hint" style="margin-top:14px">只读分享链接，任何人打开只能看统计、改不了数据，且已剥掉 Steam ID / 备注 / 赛事：</p>
+    <input type="text" readonly value="${esc(shareLink)}" style="width:100%" onclick="this.select()">`);
+  $('#cs-pull').onclick = async () => { hideModal(); await cloudPull(); if (cloud.status === 'ok') toast('已是云端最新数据', 'ok'); };
+  $('#cs-push').onclick = () => { hideModal(); setDirty(true); cloud.seq++; cloudPush(); };
+  $('#cs-token').onclick = () => { if (askToken()) { toast('口令已保存', 'ok'); if (isDirty()) cloudPush(); } };
+  $('#cs-toggle').onclick = () => {
+    hideModal();
+    if (on) { localStorage.setItem(CLOUD_OFF_KEY, '1'); clearTimeout(cloud.timer); cloud.timer = null; setCloudStatus('off'); toast('云同步已关闭，改动只存本地'); }
+    else { localStorage.removeItem(CLOUD_OFF_KEY); cloudPull(); }
+  };
+}
+$('#cloud-status')?.addEventListener('click', openCloudSettings);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) cloudCheck(); });
+window.addEventListener('beforeunload', e => { if (cloudOn() && (cloud.timer || cloud.pushing)) { e.preventDefault(); e.returnValue = ''; } });
+
 // ============ 对扩展模块暴露的接口 ============
 window.DotaApp = {
   get state() { return state; }, get ui() { return ui; },
@@ -1548,6 +1730,7 @@ function applyReadonlyChrome() {
   switchTab('stats');
 }
 renderAll();
+if (!READONLY) cloudPull();
 if (READONLY) {
   applyReadonlyChrome();
   fetch(SHARE_URL, { cache: 'no-cache' })

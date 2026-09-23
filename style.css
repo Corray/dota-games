@@ -410,6 +410,20 @@ input.au-nnum.wide{width:4.4em}
 .au-plan .hint i{font-style:normal;color:#e0b341}
 
 /* ---- 只读分享快照 ---- */
+/* ---- 云同步状态 ---- */
+.cloud-status{background:transparent;border:1px solid var(--border);border-radius:6px;padding:6px 10px;cursor:pointer;color:var(--muted);white-space:nowrap}
+.cloud-status::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;background:var(--muted);vertical-align:middle}
+.cloud-status.ok::before{background:var(--radiant)}
+.cloud-status.syncing::before,.cloud-status.pending::before{background:var(--accent);animation:cloud-blink 1s infinite}
+.cloud-status.err::before,.cloud-status.conflict::before{background:var(--danger)}
+.cloud-status.notoken::before{background:var(--accent)}
+.cloud-status.off::before{background:#555}
+.cloud-status.err,.cloud-status.conflict{color:#ffb3b3;border-color:#6b2b2b}
+@keyframes cloud-blink{50%{opacity:.25}}
+.cloud-cmp{border-collapse:collapse;margin:10px 0 14px}
+.cloud-cmp th,.cloud-cmp td{padding:4px 14px;border-bottom:1px solid var(--border);text-align:right}
+.cloud-cmp th:first-child,.cloud-cmp td:first-child{text-align:left;color:var(--muted)}
+
 .share-bar{margin:0 0 14px;padding:9px 14px;border-radius:10px;background:#1d2735;border:1px solid #2f4055;color:#b8c2d0;font-size:13px}
 .share-bar.err{background:#3a1c1c;border-color:#6b2b2b;color:#ffb3b3}
 body.readonly .tabs{pointer-events:none}

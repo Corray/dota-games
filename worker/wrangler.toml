@@ -7,3 +7,13 @@ compatibility_date = "2025-06-01"
 #   npx wrangler secret put STRATZ_TOKEN      # 可选 https://stratz.com/api
 # 本地开发写在 worker/.dev.vars（已 gitignore）：
 #   STEAM_API_KEY=xxxx
+
+# ---- 云端数据库（页面所有设备共用一份数据）----
+# 1. 创建 KV：npx wrangler kv namespace create DB
+#    命令会打印一段 [[kv_namespaces]] 配置，把其中的 id 填到下面
+# 2. 设置编辑口令：npx wrangler secret put EDIT_TOKEN
+#    页面第一次编辑时会要求输入这个口令；只读访问不需要
+# 3. 部署：npx wrangler deploy
+[[kv_namespaces]]
+binding = "DB"
+id = "填入 kv namespace create 打印的 id"
