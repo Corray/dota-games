@@ -202,12 +202,18 @@
         <label class="inline">从 <input id="sf-from" type="date"></label>
         <label class="inline">到 <input id="sf-to" type="date"></label>
         <label class="inline">最少场次 <input id="sf-min" type="number" min="1" value="1" style="width:4.5em"></label>
+        <button type="button" class="ghost" id="btn-report" title="把当前范围的战况写成 Markdown 战报：MVP / Elo 变动 / 称号 / 预测回看 / 排行 / 搭档 / 热门英雄，直接粘到群里">生成战报</button>
         <button type="button" class="ghost" id="btn-copy-md" title="把选手排行复制为 Markdown 表格">复制 Markdown</button>
         <button type="button" class="ghost" id="btn-csv" title="下载选手排行 CSV">下载 CSV</button>
         <button type="button" class="ghost" id="btn-print">打印</button>
       </div>
     </div>
     <div class="overview" id="overview"></div>
+  </div>
+
+  <div class="card">
+    <h3>称号 <span class="hint">每个称号只给当前最强的人，并列都给；一血 / 翻盘只看点过「详情解析」的比赛</span></h3>
+    <div class="overview" id="badge-board"></div>
   </div>
 
   <div class="card chart-box">

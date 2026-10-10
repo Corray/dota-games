@@ -21,6 +21,12 @@ let D = null, loading = null;      // STRATZ 数据 + 索引（bp-data.json）
 let idx = new Map();               // heroId → 矩阵下标
 let OD = null, odLoading = null, odIdx = new Map();   // 第二数据源：OpenDota 职业比赛对位（bp-data-od.json），只有克制维度
 const OD_K = 20;                   // 收缩系数：胜率按 (胜 + 10) / (场 + 20) 算，2 场 2 胜不会变成 100%
+// 内战战绩：绑定选手后，推荐 / 禁用里显示他用某英雄的内战胜负，禁用建议按内战场次排。每次 render 重算一次
+let LS = {};
+const HERO_ID_BY_NAME = new Map(Object.entries(HERO_BY_ID).map(([id, n]) => [n, Number(id)]));
+const localRec = (pid, heroId) => { const r = pid && LS[pid]?.heroes?.[HERO_BY_ID[heroId]]; return r ? { g: r.g, w: r.w } : null; };
+const localHeroIds = pid => Object.entries(LS[pid]?.heroes || {}).sort((a, b) => b[1].g - a[1].g).map(([n]) => HERO_ID_BY_NAME.get(n)).filter(Boolean);
+const recTag = r => r ? `<i class="hint rec" title="内战里用这个英雄 ${r.w} 胜 ${r.g - r.w} 负">内战 ${r.w}/${r.g}</i>` : '';
 const bp = load();
 function load() {
   try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && d.ally && d.enemy) return d; } catch {}
@@ -85,11 +91,11 @@ const usedSet = () => new Set([...allyIds(), ...enemyIds(), ...bp.bans].filter(B
 function candidates(side, pos) {
   const slot = bp[side][pos];
   const P = A.playerMap(); const p = slot.pid ? P.get(slot.pid) : null;
-  const mine = new Set((p?.heroes || []).map(n => Object.keys(HERO_BY_ID).find(k => HERO_BY_ID[k] === n)).filter(Boolean).map(Number));
+  const mine = new Set([...(p?.heroes || []).map(n => HERO_ID_BY_NAME.get(n)).filter(Boolean), ...(p ? localHeroIds(p.id) : [])]);   // 登记的擅长英雄 + 内战里用过的
   const base = new Set([...D.pools[pos], ...mine]);
   if (bp.wide) D.heroes.forEach(id => { if (lanes(id)[pos] >= 0.05) base.add(id); });
   const used = usedSet();
-  return [...base].filter(id => has(id) && !used.has(id)).map(id => ({ id, mine: mine.has(id) }));
+  return [...base].filter(id => has(id) && !used.has(id)).map(id => ({ id, mine: mine.has(id), rec: p ? localRec(p.id, id) : null }));
 }
 
 // 我方各空位推荐：把候选放进该位后的整体优势
@@ -111,8 +117,8 @@ function suggestBans() {
   const ally = allyIds(), enemy = enemyIds();
   if (!ally.some(Boolean)) {   // 没有我方英雄时克制分恒为 0.5，改按版本强势度排
     const best = new Map();
-    bp.enemy.forEach((s, pos) => { if (s.hero) return; for (const c of candidates('enemy', pos)) { const cur = best.get(c.id); const st = strength(c.id); if (!cur || lanes(c.id)[pos] > lanes(c.id)[cur.pos]) best.set(c.id, { id: c.id, h: st, d: st - 0.5, pos, mine: c.mine || cur?.mine, byStrength: true }); } });
-    return [...best.values()].sort((x, y) => (Number(!!y.mine) - Number(!!x.mine)) || (y.h - x.h)).slice(0, 10);   // 对方选手擅长的永远排前面
+    bp.enemy.forEach((s, pos) => { if (s.hero) return; for (const c of candidates('enemy', pos)) { const cur = best.get(c.id); const st = strength(c.id); if (!cur || lanes(c.id)[pos] > lanes(c.id)[cur.pos]) best.set(c.id, { id: c.id, h: st, d: st - 0.5, pos, mine: c.mine || cur?.mine, rec: c.rec || cur?.rec, byStrength: true }); } });
+    return [...best.values()].sort(banOrder(1)).slice(0, 10);
   }
   const base = heuristic(ally, enemy).h;
   const best = new Map();
@@ -120,11 +126,13 @@ function suggestBans() {
     if (s.hero) return;
     for (const c of candidates('enemy', pos)) {
       const e = [...enemy]; e[pos] = c.id; const h = heuristic(ally, e).h;
-      const cur = best.get(c.id); if (!cur || h < cur.h) best.set(c.id, { id: c.id, h, d: h - base, pos, mine: c.mine || cur?.mine });
+      const cur = best.get(c.id); if (!cur || h < cur.h) best.set(c.id, { id: c.id, h, d: h - base, pos, mine: c.mine || cur?.mine, rec: c.rec || cur?.rec });
     }
   });
-  return [...best.values()].sort((x, y) => (Number(!!y.mine) - Number(!!x.mine)) || (x.h - y.h)).slice(0, 10);   // 对方选手擅长的永远排前面
+  return [...best.values()].sort(banOrder(-1)).slice(0, 10);
 }
+// 禁用排序：对方选手擅长的永远排前面；其中内战打得多的更靠前（内战里他会拿什么，比版本数据更重要）；再按版本 / 克制分
+const banOrder = dir => (x, y) => (Number(!!y.mine) - Number(!!x.mine)) || ((y.rec?.g || 0) - (x.rec?.g || 0)) || dir * (y.h - x.h);
 // 英雄查询：它克制的 / 克制它的 / 配合好的
 function heroInfo(id) {
   const others = D.heroes.filter(h => h !== id);
@@ -192,6 +200,7 @@ function render() {
     return;
   }
   const P = A.playerMap();
+  LS = A.computeStats(S().matches).players;
   const players = [...S().players].sort((a, b) => a.name.localeCompare(b.name, 'zh'));
   const ev = heuristic(allyIds(), enemyIds());
   const anyAlly = allyIds().some(Boolean), anyEnemy = enemyIds().some(Boolean);
@@ -206,7 +215,7 @@ function render() {
       ${s.hero ? `<label class="bp-move hint">换位 <select data-act="move" title="把这个英雄换到别的号位（对方位置上的英雄会互换）">${[0, 1, 2, 3, 4].map(k => `<option value="${k}" ${k === i ? 'selected' : ''}>${POS_SHORT[k + 1]}</option>`).join('')}</select></label>` : ''}
       <select data-act="pid" title="绑定名单里的选手：推荐 / 禁用会优先用他的擅长英雄"><option value="">选手…</option>${players.map(x => `<option value="${x.id}" ${x.id === s.pid ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
       ${s.hero ? `<button type="button" class="slot-remove" data-act="rm" title="移出">×</button>` : ''}
-      ${p && p.heroes.length ? `<div class="bp-slot-pool hint">${p.heroes.map(h => { const id = Number(Object.keys(HERO_BY_ID).find(k => HERO_BY_ID[k] === h)); const w = id ? whereIs(id) : null; return `<button type="button" class="mini ${w ? 'used' : ''}" data-act="quick" data-hero="${id || ''}" ${!id || !has(id) ? 'disabled' : ''} title="${w ? '已在阵容 / 禁用里' : '放到这个位置'}">${esc(h)}</button>`; }).join('')}</div>` : ''}
+      ${p ? (() => { const ids = [...new Set([...p.heroes.map(n => HERO_ID_BY_NAME.get(n)).filter(Boolean), ...localHeroIds(p.id)])]; return ids.length ? `<div class="bp-slot-pool hint">${ids.map(id => { const w = whereIs(id), r = localRec(p.id, id); return `<button type="button" class="mini ${w ? 'used' : ''}" data-act="quick" data-hero="${id}" ${!has(id) ? 'disabled' : ''} title="${w ? '已在阵容 / 禁用里' : '放到这个位置'}${r ? `，内战 ${r.w} 胜 ${r.g - r.w} 负` : ''}">${esc(hname(id))}${r ? `<span class="rec">${r.w}/${r.g}</span>` : ''}</button>`; }).join('')}</div>` : ''; })() : ''}
     </div>`;
   };
   const modeBtn = (m, label, cls) => `<button type="button" class="bp-mode ${cls || ''} ${bp.mode === m ? 'on' : ''}" data-mode="${m}">${label}</button>`;
@@ -234,12 +243,12 @@ function render() {
     const bans = suggestBans(); const byStr = !!bans[0]?.byStrength;
     right += `<div class="card"><div class="card-head"><h3>我方推荐 <span class="hint">数字是放入后我方整体优势，50% 为均势</span></h3><div class="inline-actions">${anyAlly && anyEnemy ? `<span class="bp-eval">当前 <b>${pct(ev.h)}</b> <span class="hint">克制 ${pct(ev.vs)} · 配合 ${pct(ev.wt)}</span></span>` : ''}<label class="inline hint" title="默认只从该号位的常用英雄池里挑；勾上后所有在该号位出场率 ≥ 5% 的英雄都参与"><input type="checkbox" id="bp-wide" ${bp.wide ? 'checked' : ''}> 全英雄候选</label></div></div>
       ${out.length ? out.map(({ pos, rows, worst }) => `<div class="bp-pos-block"><h4>${POS_NAME[pos + 1]}${bp.ally[pos].pid ? ` <span class="hint">${esc(P.get(bp.ally[pos].pid)?.name || '')} 的英雄池 ★</span>` : ''}</h4>
-        <div class="bp-list">${rows.slice(0, SUGGEST_N).map(r => `<button type="button" class="bp-cand ${r.mine ? 'mine' : ''}" data-act="pick" data-pos="${pos}" data-hero="${r.id}" title="克制 ${pct(r.vs)} · 配合 ${pct(r.wt)}${r.mine ? ' · 选手擅长' : ''}">${r.mine ? '★ ' : ''}<span>${esc(hname(r.id))}</span><b>${pct(r.h)}</b><i class="${r.d >= 0 ? 'up' : 'down'}">${spct(r.d)}</i></button>`).join('') || '<span class="hint">没有可选英雄</span>'}</div>
+        <div class="bp-list">${[...rows.slice(0, SUGGEST_N), ...rows.slice(SUGGEST_N).filter(r => r.mine)].map(r => `<button type="button" class="bp-cand ${r.mine ? 'mine' : ''}" data-act="pick" data-pos="${pos}" data-hero="${r.id}" title="克制 ${pct(r.vs)} · 配合 ${pct(r.wt)}${r.mine ? ' · 选手擅长' : ''}">${r.mine ? '★ ' : ''}<span>${esc(hname(r.id))}</span><b>${pct(r.h)}</b><i class="${r.d >= 0 ? 'up' : 'down'}">${spct(r.d)}</i>${recTag(r.rec)}</button>`).join('') || '<span class="hint">没有可选英雄</span>'}</div>
         ${worst.length ? `<div class="hint bp-avoid">避坑：${worst.map(r => `${esc(hname(r.id))} ${pct(r.h)}`).join('、')}</div>` : ''}</div>`).join('') : '<p class="hint">我方 5 个位置都已选满</p>'}
     </div>
     <div class="card"><div class="card-head"><h3>禁用建议 <span class="hint">${byStr ? '我方还没选人，先按版本强势度（平均对位胜率）排' : '敌方空位放入后对我方伤害最大的'}</span></h3></div>
-      ${bans.length ? `<div class="bp-list">${bans.map(r => `<button type="button" class="bp-cand ban ${r.mine ? 'mine' : ''}" data-act="ban" data-hero="${r.id}" title="${byStr ? `平均对位胜率 ${pct(r.h)}` : `敌方 ${POS_SHORT[r.pos + 1]} 选它后我方优势 ${pct(r.h)}`}${r.mine ? ' · 对方选手擅长' : ''}">${r.mine ? '★ ' : ''}<span>${esc(hname(r.id))}</span><span class="pos-chip">${POS_SHORT[r.pos + 1]}</span><i class="${byStr ? 'up' : 'down'}">${byStr ? pct(r.h) : spct(r.d)}</i></button>`).join('')}</div>
-      <p class="hint">★ = 敌方绑定选手的擅长英雄，永远排在最前；内战里对手会玩什么比版本数据更重要。</p>` : '<p class="hint">敌方已满或没有候选</p>'}
+      ${bans.length ? `<div class="bp-list">${bans.map(r => `<button type="button" class="bp-cand ban ${r.mine ? 'mine' : ''}" data-act="ban" data-hero="${r.id}" title="${byStr ? `平均对位胜率 ${pct(r.h)}` : `敌方 ${POS_SHORT[r.pos + 1]} 选它后我方优势 ${pct(r.h)}`}${r.mine ? ' · 对方选手擅长' : ''}">${r.mine ? '★ ' : ''}<span>${esc(hname(r.id))}</span><span class="pos-chip">${POS_SHORT[r.pos + 1]}</span><i class="${byStr ? 'up' : 'down'}">${byStr ? pct(r.h) : spct(r.d)}</i>${recTag(r.rec)}</button>`).join('')}</div>
+      <p class="hint">★ = 敌方绑定选手的擅长英雄（名单里登记的 + 内战里用过的），永远排在最前，内战场次多的更靠前；内战里对手会玩什么比版本数据更重要。</p>` : '<p class="hint">敌方已满或没有候选</p>'}
     </div>`;
   }
 

@@ -203,6 +203,46 @@ function computeStats(matches) {
   return { players: ps, heroes, duos, total: matches.length, radiantWins, avgDuration: durN ? durSum / durN : null, elo, posKda, preds, seqTotal: seq };
 }
 
+// ============ 称号（成就徽章） ============
+/* 每个称号只给当前最强的人（并列都给），样本不够就空缺。录像类（一血 / 翻盘）只看点过「详情解析」的比赛，解析率低时会偏向被解析过的场 */
+const COMEBACK_GOLD = 5000;   // 赢的一方曾落后这么多经济才算翻盘
+function computeBadges(st, matches) {
+  const P = playerMap();
+  const players = Object.values(st.players).filter(s => P.has(s.pid));
+  const out = {}; const give = (pid, b) => (out[pid] ||= []).push(b);
+  const top = (val, min, badge, fmt) => {
+    const list = players.map(s => ({ s, v: val(s) })).filter(x => x.v != null && x.v >= min); if (!list.length) return;
+    const mx = Math.max(...list.map(x => x.v));
+    list.filter(x => x.v === mx).forEach(x => give(x.s.pid, { ...badge, detail: fmt(x.v, x.s) }));
+  };
+  const longest = s => { let mx = 0, cur = 0; for (const r of s.results) { cur = r.won ? cur + 1 : 0; mx = Math.max(mx, cur); } return mx; };
+  top(s => s.elo, ELO_BASE + 1, { icon: '👑', name: 'Elo 第一' }, v => `Elo ${Math.round(v)}`);
+  top(longest, 3, { icon: '🔥', name: '连胜王' }, v => `最长 ${v} 连胜`);
+  top(s => s.g, 5, { icon: '🛡', name: '铁人' }, v => `出场 ${v} 场`);
+  top(s => s.closeG >= 3 ? s.closeW / s.closeG : null, 0.5, { icon: '🧊', name: '大心脏' }, (v, s) => `胶着局 ${s.closeW} 胜 ${s.closeG - s.closeW} 负（击杀差 ≤ ${CLOSE_MARGIN}）`);
+  top(s => s.kdaG >= 5 ? s.kdaRel : null, 1.2, { icon: '🎯', name: 'KDA 之王' }, v => `同号位平均的 ${v.toFixed(2)} 倍`);
+  top(s => Object.keys(s.heroes).length, 8, { icon: '🧩', name: '英雄池最广' }, v => `用过 ${v} 个英雄`);
+  const duos = Object.values(st.duos).filter(d => d.g >= 5 && P.has(d.a) && P.has(d.b)).sort((a, b) => b.w / b.g - a.w / a.g || b.g - a.g);
+  if (duos.length && duos[0].w / duos[0].g > 0.5) { const d = duos[0]; [d.a, d.b].forEach(pid => give(pid, { icon: '🤝', name: '黄金搭档', detail: `和 ${pname(P, pid === d.a ? d.b : d.a)} 同队 ${d.w} 胜 ${d.g - d.w} 负` })); }
+  // 录像类：一血（第一次英雄击杀的凶手）、翻盘（赢的一方曾落后 ≥ COMEBACK_GOLD 经济）
+  const fb = {}, cb = {}, cbMax = {};
+  for (const m of matches) {
+    const rp = m.replay; if (!rp || !rp.heroes) continue;
+    const resolve = h => { const info = rp.heroes.find(x => x.h === h); if (!info) return null; const side = m[info.r ? 'radiant' : 'dire'] || []; const p = (info.acc && side.find(s => P.get(s.pid)?.accountId === info.acc)) || side.find(s => s.hero === (HERO_BY_ID[h] || '')); return p?.pid || null; };
+    const first = (rp.kills || []).map(k => resolve(k[1])).find(Boolean);
+    if (first) fb[first] = (fb[first] || 0) + 1;
+    if (rp.gold?.length && m.winner) {
+      const sign = m.winner === 'radiant' ? 1 : -1; const worst = Math.min(...rp.gold.map(g => g * sign));
+      if (worst <= -COMEBACK_GOLD) for (const s of m[m.winner] || []) { cb[s.pid] = (cb[s.pid] || 0) + 1; cbMax[s.pid] = Math.max(cbMax[s.pid] || 0, -worst); }
+    }
+  }
+  const byCount = (obj, min, badge, fmt) => { const es = Object.entries(obj).filter(([pid, n]) => n >= min && P.has(pid)); if (!es.length) return; const mx = Math.max(...es.map(e => e[1])); es.filter(e => e[1] === mx).forEach(([pid, n]) => give(pid, { ...badge, detail: fmt(n, pid) })); };
+  byCount(fb, 2, { icon: '🩸', name: '一血机器' }, n => `${n} 次一血（只算已解析的比赛）`);
+  byCount(cb, 1, { icon: '🔄', name: '翻盘王' }, (n, pid) => `${n} 次落后 ${COMEBACK_GOLD}+ 经济翻盘，最多落后 ${cbMax[pid]}（只算已解析的比赛）`);
+  return out;
+}
+const badgesHtml = (list, full = false) => (list || []).map(b => full ? `<span class="badge full" title="${esc(b.detail)}">${b.icon} ${esc(b.name)} <span class="hint">${esc(b.detail)}</span></span>` : `<span class="badge" title="${esc(b.name)}：${esc(b.detail)}">${b.icon}</span>`).join('');
+
 // ============ 赛前预测 ============
 /* 两队各取上场选手 Elo 均值，套 Elo 期望公式得天辉胜率。和 computeStats 里逐场更新用的是同一个公式，
    所以统计页「预测回看」的准确率就是这个函数在历史上的真实表现。Elo 来自 st.elo（没打过的人按 1500） */
@@ -414,7 +454,8 @@ function resetPlayerForm() {
 }
 
 function renderPlayers() {
-  const stats = computeStats(state.matches).players;
+  const stAll = computeStats(state.matches), stats = stAll.players;
+  const badges = computeBadges(stAll, state.matches);
   const so = loadScoreOpt();
   const q = ui.playerSearch.trim().toLowerCase();
   const scored = state.players
@@ -432,7 +473,7 @@ function renderPlayers() {
   $('#player-empty').classList.toggle('hidden', state.players.length > 0);
   $('#player-table tbody').innerHTML = scored.map(({ p, s, sc }) => {
     return `<tr>
-      <td><button class="name-btn" data-act="detail" data-id="${p.id}">${esc(p.name)}</button>${p.accountId ? `<div class="hint" title="Steam 账号 ID">🆔 ${p.accountId}</div>` : ''}${p.note ? `<div class="hint">${esc(p.note)}</div>` : ''}</td>
+      <td><button class="name-btn" data-act="detail" data-id="${p.id}">${esc(p.name)}</button>${badgesHtml(badges[p.id])}${p.accountId ? `<div class="hint" title="Steam 账号 ID">🆔 ${p.accountId}</div>` : ''}${p.note ? `<div class="hint">${esc(p.note)}</div>` : ''}</td>
       <td>${rankBadge(p)}</td>
       <td>${p.positions.map(i => `<span class="pos-chip">${POS_SHORT[i]}</span>`).join('') || '<span class="hint">-</span>'}</td>
       <td class="wrap">${p.heroes.map(h => `<span class="hero-chip">${esc(h)}</span>`).join('') || '<span class="hint">-</span>'}</td>
@@ -875,6 +916,13 @@ let lastStatsRows = [];
     a.download = `dota-stats-${today()}.csv`; a.click(); URL.revokeObjectURL(a.href);
   });
   $('#btn-print').addEventListener('click', () => window.print());
+  $('#btn-report').addEventListener('click', async () => {
+    const md = buildReport(); if (!md) return toast('先切到统计页', 'err');
+    let copied = false; try { await navigator.clipboard.writeText(md); copied = true; } catch { /* 浏览器不允许自动复制 */ }
+    showModal(`<h2>战报 <span class="hint">Markdown，${copied ? '已复制到剪贴板' : '手动全选复制'}</span></h2><textarea rows="22" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px">${esc(md)}</textarea><p class="hint">范围跟着上面的日期筛选走；想出月报就把「从 / 到」填成当月。</p>`);
+    if (copied) toast('战报已复制', 'ok');
+  });
+  $('#badge-board').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
 })();
 
 function filteredMatches() {
@@ -972,6 +1020,46 @@ function renderStats() {
 
   renderEloChart(st, rows, P);
   renderPredictionReport(st, P);
+  renderBadgeBoard(computeBadges(st, ms), P);
+  lastReport = { st, ms, rows, P, data };
+}
+
+// ---- 称号榜 ----
+function renderBadgeBoard(badges, P) {
+  const box = $('#badge-board'); if (!box) return;
+  const byName = new Map();
+  for (const [pid, list] of Object.entries(badges)) for (const b of list) { const o = byName.get(b.name) || { icon: b.icon, name: b.name, holders: [] }; o.holders.push({ pid, detail: b.detail }); byName.set(b.name, o); }
+  box.innerHTML = byName.size ? [...byName.values()].map(b => `<div class="stat-tile"><div class="k">${b.icon} ${esc(b.name)}</div><div class="v">${b.holders.map(h => `<button class="name-btn" data-pid="${h.pid}">${esc(pname(P, h.pid))}</button>`).join('、')}</div><div class="s">${esc(b.holders[0].detail)}</div></div>`).join('')
+    : '<p class="hint">场次还不够，称号都空缺着（连胜王 ≥3 连胜、铁人 ≥5 场、大心脏 ≥3 场胶着局、KDA 之王 ≥5 场有 KDA……）</p>';
+}
+
+// ---- 一键战报：把当前筛选范围的统计写成 Markdown，直接粘到群里 ----
+let lastReport = null;
+function buildReport() {
+  if (!lastReport) return '';
+  const { st, ms, rows, P, data } = lastReport;
+  const from = $('#sf-from').value, to = $('#sf-to').value;
+  const dates = ms.map(m => m.date).sort();
+  const range = from || to ? `${from || dates[0] || '?'} ~ ${to || dates[dates.length - 1] || '?'}` : (dates.length ? `${dates[0]} ~ ${dates[dates.length - 1]}` : '无');
+  const L = [`# Dota 2 内战战报（${range}）`, '', `- 共 **${st.total}** 场，天辉 ${st.radiantWins} 胜 / 夜魇 ${st.total - st.radiantWins} 胜${st.avgDuration ? `，平均 ${Math.round(st.avgDuration)} 分钟` : ''}，${rows.length} 人出场`];
+  if (!st.total) return L.join('\n');
+  const byScore = [...data].sort((a, b) => b.score - a.score);
+  const mvp = byScore.find(r => r.g >= 3) || byScore[0];
+  if (mvp) L.push(`- **MVP**：${mvp.name}（评分 ${mvp.score.toFixed(1)}，${mvp.g} 场 ${pct(mvp.w, mvp.g)}）`);
+  const byElo = [...rows].sort((a, b) => b.elo - a.elo);
+  if (byElo.length >= 2) L.push(`- **Elo 涨最多**：${pname(P, byElo[0].pid)} ${byElo[0].elo - ELO_BASE >= 0 ? '+' : ''}${Math.round(byElo[0].elo - ELO_BASE)}　**跌最多**：${pname(P, byElo[byElo.length - 1].pid)} ${Math.round(byElo[byElo.length - 1].elo - ELO_BASE)}（本期内从 1500 起算）`);
+  const badges = computeBadges(st, ms); const byName = new Map();
+  for (const [pid, list] of Object.entries(badges)) for (const b of list) { const o = byName.get(b.name) || { b, who: [] }; o.who.push(pid); byName.set(b.name, o); }
+  if (byName.size) { L.push('', '## 称号'); for (const { b, who } of byName.values()) L.push(`- ${b.icon} **${b.name}**：${who.map(pid => pname(P, pid)).join('、')}（${badges[who[0]].find(x => x.name === b.name).detail}）`); }
+  const pr = predictionReport(st.preds);
+  if (pr.decisive) { L.push('', '## 预测回看', `- 赛前 Elo 预测准确率 ${pct(pr.hit, pr.decisive)}（有倾向的 ${pr.decisive} 场），Brier ${pr.brier.toFixed(3)}`); const u = pr.upsets[0]; if (u) { const m = ms.find(x => x.id === u.id); L.push(`- 最大爆冷：${u.date} ${u.id}，赛前只给 ${Math.round((1 - u.surprise) * 100)}% 的${u.winner === 'radiant' ? '天辉' : '夜魇'}赢了${m ? `（${(m[u.winner] || []).map(s => pname(P, s.pid)).join('、')}）` : ''}`); } }
+  L.push('', '## 排行（按评分，前 10）', '| # | 选手 | 评分 | 场次 | 胜率 | KDA | 连胜/负 |', '|---|---|---|---|---|---|---|');
+  byScore.slice(0, 10).forEach((r, i) => L.push(`| ${i + 1} | ${r.name} | ${r.score.toFixed(1)} | ${r.g} | ${pct(r.w, r.g)} | ${r.kda >= 0 ? r.kda.toFixed(2) : '-'} | ${r.streak > 0 ? r.streak + '连胜' : r.streak < 0 ? -r.streak + '连败' : '-'} |`));
+  const duos = Object.values(st.duos).filter(d => d.g >= 2 && P.has(d.a) && P.has(d.b));
+  if (duos.length) { const best = [...duos].sort((a, b) => b.w / b.g - a.w / a.g || b.g - a.g)[0], worst = [...duos].sort((a, b) => a.w / a.g - b.w / b.g || b.g - a.g)[0]; L.push('', '## 搭档', `- 最佳：${pname(P, best.a)} + ${pname(P, best.b)}，${best.w}/${best.g}`, `- 最差：${pname(P, worst.a)} + ${pname(P, worst.b)}，${worst.w}/${worst.g}`); }
+  const heroes = Object.values(st.heroes).sort((a, b) => b.g - a.g).slice(0, 5);
+  if (heroes.length) L.push('', '## 热门英雄', ...heroes.map(h => `- ${h.hero}：${h.g} 场 ${pct(h.w, h.g)}`));
+  return L.join('\n');
 }
 
 // ---- Elo 走势（出场最多的 8 人）：横轴 = 筛选范围内的比赛先后（seq），没上场的比赛沿用上一场的值，首场之前不画 ----
@@ -1020,8 +1108,10 @@ function renderPredictionReport(st, P) {
 // ============ 选手详情弹窗 ============
 function showPlayerDetail(pid) {
   const P = playerMap(); const p = P.get(pid); if (!p) return;
-  const st = computeStats(ui.tab === 'stats' ? filteredMatches() : state.matches).players[pid];
+  const scopeMatches = ui.tab === 'stats' ? filteredMatches() : state.matches;
+  const stAll = computeStats(scopeMatches), st = stAll.players[pid];
   if (!st) return showModal(`<h2>${esc(p.name)} ${rankBadge(p)}</h2><p class="empty">还没有比赛记录</p>`);
+  const myBadges = computeBadges(stAll, scopeMatches)[pid] || [];
   const tbl = (head, rows, empty) => rows.length
     ? `<div class="table-wrap"><table class="tbl"><thead><tr>${head.map(h => `<th${h.startsWith('#') ? ' class="num"' : ''}>${h.replace('#', '')}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td${head[i].startsWith('#') ? ' class="num"' : ''}>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
     : `<p class="hint">${empty}</p>`;
@@ -1032,6 +1122,7 @@ function showPlayerDetail(pid) {
   const recent = [...st.results].reverse().slice(0, 12).map(r => [esc(r.date), `<button type="button" class="link" data-act="expand-match" data-mid="${esc(r.id)}" title="点击展开 / 收起这场比赛的详情">${esc(r.id)}</button>`, `<span class="side ${r.side}">${r.side === 'radiant' ? '天辉' : '夜魇'}</span>`, r.pos ? POS_SHORT[r.pos] : '-', esc(r.hero || '-'), r.kda ? r.kda.join('/') : '-', r.won ? '<span class="win">胜</span>' : '<span class="loss">负</span>']);
   showModal(`
     <h2>${esc(p.name)} ${rankBadge(p)}</h2>
+    ${myBadges.length ? `<div class="badge-row">${badgesHtml(myBadges, true)}</div>` : ''}
     <div class="hint">擅长位置：${p.positions.map(i => POS_SHORT[i]).join(' ') || '-'} ｜ 擅长英雄：${p.heroes.map(esc).join('、') || '-'}${p.note ? ' ｜ ' + esc(p.note) : ''} <button type="button" class="mini" id="pd-recalc" title="按下面的位置 / 英雄统计重置擅长位置和擅长英雄">按战绩重置</button></div>
     <div class="overview" style="margin-top:12px">
       <div class="stat-tile"><div class="k">总场次</div><div class="v">${st.g}</div><div class="s">${st.w} 胜 ${st.g - st.w} 负</div></div>
