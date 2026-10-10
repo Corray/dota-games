@@ -665,13 +665,45 @@ function saveMatch() {
   const dur = Number($('#m-duration').value);
   const pack = s => { const o = { pid: s.pid, pos: s.pos || 0, hero: (s.hero || '').trim() }; if (s.kda) o.kda = s.kda; return o; };
   const match = { id, date, duration: dur > 0 ? dur : null, note: $('#m-note').value.trim(), radiant: r.map(pack), dire: d.map(pack), winner: ui.draft.winner, createdAt: Date.now() };
+  if (ui.draftScore) match.score = ui.draftScore;
   if (ui.editingMatch) {
     const i = state.matches.findIndex(m => m.id === ui.editingMatch);
-    match.createdAt = state.matches[i]?.createdAt || match.createdAt;
+    const old = state.matches[i] || {};
+    match.createdAt = old.createdAt || match.createdAt;
+    // 表单里没有的字段（录像解析 / 比分 / 联赛号）从旧记录带过来，不然编辑一次就丢了
+    for (const k of ['replay', 'score', 'leagueId']) if (old[k] != null && match[k] == null) match[k] = old[k];
     state.matches[i] = match; toast('已更新比赛 ' + id, 'ok');
   } else { state.matches.push(match); toast('已保存比赛 ' + id, 'ok'); }
   save(); resetMatchForm();
   hooks.afterSaveMatch.forEach(fn => { try { fn(match); } catch (e) { console.error(e); } });
+  queueReplay(match.id);
+}
+
+// ============ 保存 / 导入后自动拉录像解析 ============
+/* ID 是纯数字比赛编号的比赛，保存后在后台串行拉一次完美世界录像解析（分路 / 经济曲线 / 击杀时间线），拉不到就静默跳过。
+   一血 / 翻盘称号只看已解析的比赛，这样新导入的比赛不用再手动点「详情解析」。可在「批量解析」弹窗里关掉 */
+const AUTO_REPLAY_KEY = 'dota-auto-replay';
+const autoReplayOn = () => localStorage.getItem(AUTO_REPLAY_KEY) !== '0';
+const replayQueue = []; let replayBusy = false, replayDone = 0;
+function queueReplay(id) {
+  if (READONLY || !autoReplayOn() || !/^\d{6,}$/.test(id) || replayQueue.includes(id)) return;
+  const m = state.matches.find(x => x.id === id); if (!m || m.replay) return;
+  replayQueue.push(id);
+  if (!replayBusy) drainReplayQueue();
+}
+async function drainReplayQueue() {
+  replayBusy = true;
+  while (replayQueue.length) {
+    const id = replayQueue.shift();
+    const m = state.matches.find(x => x.id === id);
+    if (m && !m.replay) {
+      try { const rp = await fetchReplay(id); if (rp) { m.replay = rp; replayDone++; save(); if (ui.tab === 'matches') renderMatches(); } }
+      catch (e) { console.warn('自动解析失败', id, e.message); }
+    }
+    if (replayQueue.length) await new Promise(r => setTimeout(r, 400));
+  }
+  replayBusy = false;
+  if (replayDone) { toast(`已自动拉取 ${replayDone} 场录像解析`, 'ok'); replayDone = 0; }
 }
 // 供赛事模块预填两队阵容后跳到记录页
 function prefillMatch(radiantPids, direPids, meta = {}) {
@@ -685,7 +717,7 @@ function prefillMatch(radiantPids, direPids, meta = {}) {
   switchTab('record'); window.scrollTo({ top: 0 });
 }
 function resetMatchForm() {
-  ui.editingMatch = null; ui.draft = newDraft(); ui.activeTeam = 'radiant';
+  ui.editingMatch = null; ui.draft = newDraft(); ui.activeTeam = 'radiant'; ui.draftScore = null;
   $('#m-id').value = ''; $('#m-date').value = today(); $('#m-duration').value = ''; $('#m-note').value = '';
   $('#match-form-title').textContent = '新比赛';
   $('#btn-cancel-match').classList.add('hidden');
@@ -768,7 +800,8 @@ function openReplayAll() {
   const skipped = state.matches.filter(m => !m.replay && !isSteamId(m)).length;
   showModal(`<h2>批量解析 <span class="hint">拉取完美世界录像解析：分路、经济曲线、击杀时间线</span></h2>
     <p class="hint">还没解析的比赛 <b>${todo.length}</b> 场${skipped ? `（另有 ${skipped} 场 ID 不是比赛编号，拉不到）` : ''}。逐场串行，每场约 1-3 秒；太久远的比赛完美世界可能已经没有录像数据，会记为「无数据」跳过。</p>
-    <div class="inline-actions"><button type="button" class="primary" id="ra-run" ${todo.length ? '' : 'disabled'}>开始</button><button type="button" class="ghost hidden" id="ra-stop">停止</button></div>
+    <div class="inline-actions"><button type="button" class="primary" id="ra-run" ${todo.length ? '' : 'disabled'}>开始</button><button type="button" class="ghost hidden" id="ra-stop">停止</button>
+      <label class="inline hint" title="保存 / 导入 ID 为比赛编号的比赛后，后台自动拉一次解析，拉不到就跳过"><input type="checkbox" id="ra-auto" ${autoReplayOn() ? 'checked' : ''}> 保存 / 导入比赛时自动解析</label></div>
     <div id="ra-progress" class="hint" style="margin-top:8px"></div><div id="ra-log" class="hint" style="max-height:260px;overflow:auto;margin-top:6px"></div>`);
   $('#ra-run').onclick = async () => {
     const run = $('#ra-run'), stop = $('#ra-stop'), prog = $('#ra-progress'), log = $('#ra-log');
@@ -792,6 +825,7 @@ function openReplayAll() {
     toast(`批量解析：成功 ${ok}，无数据 ${none}，失败 ${fail}`, ok ? 'ok' : '');
   };
   $('#ra-stop').onclick = () => { replayAllStop = true; };
+  $('#ra-auto').onchange = e => { localStorage.setItem(AUTO_REPLAY_KEY, e.target.checked ? '1' : '0'); toast(e.target.checked ? '已开启：保存 / 导入比赛后自动拉解析' : '已关闭自动解析'); };
 }
 $('#btn-replay-all').addEventListener('click', openReplayAll);
 const fmtClock = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
@@ -1726,6 +1760,7 @@ function applyImport(saveNow) {
   let skipped = 0;
   for (const side of ['radiant', 'dire']) { let k = 0; parsed[side].forEach((r, i) => { const c = chosen.get(side + i); if (c.pid === '__skip') { skipped++; return; } if (k < 5) ui.draft[side][k++] = { pid: c.pid, pos: c.pos, hero: r.hero, kda: r.kda }; }); }
   $('#m-id').value = parsed.id; $('#m-date').value = parsed.date; $('#m-duration').value = parsed.duration || '';
+  ui.draftScore = parsed.score.every(x => Number.isFinite(Number(x))) ? parsed.score.map(Number) : null;   // 保存时写成 m.score 字段，不只靠备注里的文字
   if (!$('#m-note').value.trim()) $('#m-note').value = `${parsed.source} 导入 · 比分 ${parsed.score.join(':')}`;
   $('#match-form-title').textContent = exists ? '编辑比赛：' + parsed.id : `新比赛（${parsed.source} 导入）`;
   $('#btn-cancel-match').classList.toggle('hidden', !exists);
@@ -1835,7 +1870,8 @@ function importParsedMatch(parsed, { leagueId, autoNew, source }) {
   if (leagueId) match.leagueId = Number(leagueId);
   if (parsed.score.every(x => Number.isFinite(Number(x)))) match.score = parsed.score.map(Number);
   const i = state.matches.findIndex(m => m.id === match.id);
-  if (i >= 0) state.matches[i] = { ...match, createdAt: state.matches[i].createdAt }; else state.matches.push(match);
+  if (i >= 0) state.matches[i] = { ...match, createdAt: state.matches[i].createdAt, ...(state.matches[i].replay ? { replay: state.matches[i].replay } : {}) }; else state.matches.push(match);
+  queueReplay(match.id);
   return { created };
 }
 $('#btn-league').addEventListener('click', openLeagueImport);
