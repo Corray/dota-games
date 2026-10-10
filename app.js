@@ -737,22 +737,63 @@ function compactReplay(r) {
     bp: (r.picksBans || []).sort((a, b) => a.order - b.order).map(x => [x.heroId, x.pick ? 1 : 0, x.team]),
   };
 }
+// 拉一场录像解析：返回压缩后的 rp；完美世界还没有数据返回 null；网络 / 接口错误抛出
+async function fetchReplay(id) {
+  const c = new AbortController(); const t = setTimeout(() => c.abort(), 20000);
+  let res;
+  try { res = await fetch(`${PWESPORTS_REPLAY}?matchId=${id}`, { signal: c.signal }); }
+  catch (e) { throw new Error(e.name === 'AbortError' ? '超时' : e.message); }
+  finally { clearTimeout(t); }
+  if (!res.ok) throw new Error('返回 ' + res.status);
+  const body = await res.json();
+  if (body.code !== 0) throw new Error(body.message || '返回 code ' + body.code);
+  return compactReplay(body.result || {});
+}
 async function loadReplay(m, btn) {
   const id = extractMatchId(m.id);
   if (!id) return toast('这场比赛的 ID 不是 Dota 2 比赛编号，没有可拉取的解析', 'err');
   if (btn) { btn.disabled = true; btn.textContent = '拉取中…'; }
   try {
-    const c = new AbortController(); const t = setTimeout(() => c.abort(), 20000);
-    const res = await fetch(`${PWESPORTS_REPLAY}?matchId=${id}`, { signal: c.signal }).finally(() => clearTimeout(t));
-    if (!res.ok) throw new Error('返回 ' + res.status);
-    const body = await res.json();
-    if (body.code !== 0) throw new Error(body.message || '返回 code ' + body.code);
-    const rp = compactReplay(body.result || {});
+    const rp = await fetchReplay(id);
     if (!rp) { toast('暂无解析：完美世界还没有这场比赛的录像数据，刚结束的比赛通常要等一会儿', 'err'); return; }
     m.replay = rp; save(); renderMatches(); showReplayModal(m); toast('解析已保存', 'ok');
-  } catch (e) { toast('拉取解析失败：' + (e.name === 'AbortError' ? '超时' : e.message), 'err'); }
+  } catch (e) { toast('拉取解析失败：' + e.message, 'err'); }
   finally { if (btn) { btn.disabled = false; btn.textContent = m.replay ? '解析 ✓' : '详情解析'; } }
 }
+// 批量解析：把所有还没解析、且 ID 是 Dota 2 比赛编号的比赛逐场拉一遍。一血 / 翻盘称号只看已解析的比赛，解析得越全越公平
+let replayAllStop = false;
+function openReplayAll() {
+  const isSteamId = m => /^\d{6,}$/.test(m.id);   // 只认纯数字的比赛编号；自动生成的「20260923-01」也含 8 位数字，不能用 extractMatchId
+  const todo = state.matches.filter(m => !m.replay && isSteamId(m)).sort((a, b) => b.date.localeCompare(a.date));
+  const skipped = state.matches.filter(m => !m.replay && !isSteamId(m)).length;
+  showModal(`<h2>批量解析 <span class="hint">拉取完美世界录像解析：分路、经济曲线、击杀时间线</span></h2>
+    <p class="hint">还没解析的比赛 <b>${todo.length}</b> 场${skipped ? `（另有 ${skipped} 场 ID 不是比赛编号，拉不到）` : ''}。逐场串行，每场约 1-3 秒；太久远的比赛完美世界可能已经没有录像数据，会记为「无数据」跳过。</p>
+    <div class="inline-actions"><button type="button" class="primary" id="ra-run" ${todo.length ? '' : 'disabled'}>开始</button><button type="button" class="ghost hidden" id="ra-stop">停止</button></div>
+    <div id="ra-progress" class="hint" style="margin-top:8px"></div><div id="ra-log" class="hint" style="max-height:260px;overflow:auto;margin-top:6px"></div>`);
+  $('#ra-run').onclick = async () => {
+    const run = $('#ra-run'), stop = $('#ra-stop'), prog = $('#ra-progress'), log = $('#ra-log');
+    run.disabled = true; stop.classList.remove('hidden'); replayAllStop = false;
+    let ok = 0, none = 0, fail = 0;
+    for (let i = 0; i < todo.length; i++) {
+      if (replayAllStop || !$('#ra-progress')) break;
+      const m = todo[i];
+      prog.textContent = `${i + 1}/${todo.length}：${m.id}（${m.date}）…`;
+      try {
+        const rp = await fetchReplay(m.id);
+        if (rp) { m.replay = rp; ok++; log.insertAdjacentHTML('afterbegin', `<div><span class="win">✓</span> ${esc(m.id)}</div>`); }
+        else { none++; log.insertAdjacentHTML('afterbegin', `<div><span class="hint">－</span> ${esc(m.id)} 无数据</div>`); }
+      } catch (e) { fail++; log.insertAdjacentHTML('afterbegin', `<div><span class="loss">✗</span> ${esc(m.id)} ${esc(e.message)}</div>`); }
+      if (ok && ok % 5 === 0) save();   // 中途也落盘，停止 / 关页面不白拉
+      if (i < todo.length - 1) await new Promise(r => setTimeout(r, 400));
+    }
+    if (ok) { save(); renderMatches(); }
+    stop.classList.add('hidden');
+    if ($('#ra-progress')) prog.innerHTML = `完成：解析 <b>${ok}</b> 场，无数据 ${none} 场，失败 ${fail} 场${replayAllStop ? '（已停止）' : ''}`;
+    toast(`批量解析：成功 ${ok}，无数据 ${none}，失败 ${fail}`, ok ? 'ok' : '');
+  };
+  $('#ra-stop').onclick = () => { replayAllStop = true; };
+}
+$('#btn-replay-all').addEventListener('click', openReplayAll);
 const fmtClock = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 // 折线图（单轴）：series = [{ v: [], color }]，zero = 是否以 0 为中线并按正负分色（正 = 天辉领先）
 // v 里允许 null（该点无数据，折线在此断开——多人 Elo 走势里每人只从首场开始画）

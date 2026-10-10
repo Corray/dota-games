@@ -376,8 +376,33 @@ function render() {
   const t = cur();
   if (tui.view !== 'list' && !t) tui.view = 'list';
   root().innerHTML = tui.view === 'list' ? viewList() : viewDetail(t);
+  drawBracketLines();
 }
 A.hooks.renderTab.tournament = render;
+
+/* 淘汰赛对阵图连线：在每个 .bracket 容器里铺一层 SVG，把上游系列赛卡片的右边连到下游卡片的左边（肘形线）。
+   胜者去向实线，败者去向（双败掉落 / 三四名决赛）虚线。跨容器（败者组 ← 胜者组）不画，用卡片里的「待定」自己看。
+   布局靠 CSS，这里只在渲染后量坐标；窗口尺寸变了重画一次 */
+function drawBracketLines() {
+  for (const box of $$('.bracket')) {
+    box.querySelector('svg.b-lines')?.remove();
+    const cards = new Map(Array.from(box.querySelectorAll('.series[data-series]')).map(c => [c.dataset.series, c]));
+    const bb = box.getBoundingClientRect(), sx = box.scrollLeft, sy = box.scrollTop;
+    const pos = el => { const r = el.getBoundingClientRect(); return { l: r.left - bb.left + sx, r: r.right - bb.left + sx, y: r.top - bb.top + sy + r.height / 2 }; };
+    const paths = [];
+    for (const [, card] of cards) {
+      const to = pos(card);
+      (card.dataset.src || '').split(',').forEach(part => {
+        const [sid, take] = part.split(':'); const from = cards.get(sid); if (!from) return;
+        const f = pos(from); const mx = Math.round((f.r + to.l) / 2) + (take === 'l' ? 6 : 0);   // 败者线拐点错开 6px，和胜者线不重叠
+        paths.push(`<path d="M${f.r},${f.y} H${mx} V${to.y} H${to.l}" class="${take === 'l' ? 'lose' : 'win'}"/>`);
+      });
+    }
+    if (!paths.length) continue;
+    box.insertAdjacentHTML('beforeend', `<svg class="b-lines" width="${box.scrollWidth}" height="${box.scrollHeight}" style="width:${box.scrollWidth}px;height:${box.scrollHeight}px">${paths.join('')}</svg>`);
+  }
+}
+window.addEventListener('resize', () => { if ($$('.bracket').length) drawBracketLines(); });
 
 function viewList() {
   const list = [...T()].sort((x, y) => y.createdAt - x.createdAt);
@@ -541,7 +566,8 @@ function seriesCard(t, st, s) {
   const r = resolve(st, s);
   const side = (id, v, w, isWin) => `<div class="t ${isWin ? 'win' : ''} ${!id && !v ? 'tbd' : ''}">${v ? '<span class="hint">轮空</span>' : `<span class="tn-name">${esc(id ? tname(t, id) : '待定')}</span>`}${id && (r.a && r.b) ? `<span class="sc">${w}</span>` : ''}</div>`;
   const cls = r.done ? 'done' : (r.a && r.b ? (s.games.length ? 'live' : 'ready') : 'wait');
-  return `<div class="series ${cls} ${s.tb ? 'tb' : ''} ${r.a && r.b ? 'clickable' : ''}" data-series="${s.id}" title="${r.a && r.b ? '点击记分' : ''}">
+  const src = s.from ? ['a', 'b'].map(k => s.from[k] ? `${s.from[k].sid}:${s.from[k].take}` : '').join(',') : '';
+  return `<div class="series ${cls} ${s.tb ? 'tb' : ''} ${r.a && r.b ? 'clickable' : ''}" data-series="${s.id}" data-src="${src}" title="${r.a && r.b ? '点击记分' : ''}">
     ${s.label || s.tb ? `<div class="series-label">${esc(s.label || '加赛')}</div>` : ''}
     ${side(r.a, r.voidA, r.wa, r.done && r.winner && r.winner === r.a)}
     ${side(r.b, r.voidB, r.wb, r.done && r.winner && r.winner === r.b)}
