@@ -501,3 +501,19 @@ tr.ld-same td{color:var(--muted)}
 .bp-slot.target .hint{color:var(--accent)}
 .bp-move{display:inline-flex;align-items:center;gap:3px;font-size:12px}
 .bp-move select{padding:2px 4px;font-size:12px}
+
+/* ---- 赛前预测（记录页） ---- */
+.predict{margin:10px 0 4px}
+.predict-bar{display:flex;height:26px;border-radius:6px;overflow:hidden;border:1px solid var(--border);font-size:12px;font-weight:700;line-height:26px}
+.predict-bar span{white-space:nowrap;overflow:hidden;padding:0 8px;transition:width .3s}
+.predict-bar .radiant{background:var(--radiant-dim);color:var(--radiant)}
+.predict-bar .dire{background:var(--dire-dim);color:var(--dire);text-align:right}
+.predict .hint b{color:var(--text)}
+
+/* ---- Elo 走势 ---- */
+.chart-box{position:relative}
+.chart-legend{display:flex;flex-wrap:wrap;gap:4px 14px;margin:4px 0 6px;font-size:12px;color:var(--muted)}
+.chart-legend .lg{display:inline-flex;align-items:center;gap:5px}
+.chart-legend .lg i{display:inline-block;width:10px;height:10px;border-radius:2px}
+.chart-legend .lg b{color:var(--text);font-variant-numeric:tabular-nums}
+.rp-tip .hint{font-weight:400}

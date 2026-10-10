@@ -130,7 +130,7 @@ function computeStats(matches) {
   const ps = {}, heroes = {}, duos = {};
   let radiantWins = 0, durSum = 0, durN = 0;
   const sorted = [...matches].sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || 0) - (b.createdAt || 0));
-  const getP = pid => ps[pid] ||= { pid, g: 0, w: 0, rg: 0, rw: 0, dg: 0, dw: 0, pos: {}, heroes: {}, mates: {}, opps: {}, streak: 0, results: [], k: 0, d: 0, a: 0, kdaG: 0, kdaPosN: {}, closeG: 0, closeW: 0 };
+  const getP = pid => ps[pid] ||= { pid, g: 0, w: 0, rg: 0, rw: 0, dg: 0, dw: 0, pos: {}, heroes: {}, mates: {}, opps: {}, streak: 0, results: [], k: 0, d: 0, a: 0, kdaG: 0, kdaPosN: {}, closeG: 0, closeW: 0, eloHist: [] };
   const posKda = {};   // 各号位的 KDA 基线：{ pos: { ka, d, n } }，0 = 未填号位
   for (const m of sorted) {
     if (m.winner === 'radiant') radiantWins++;
@@ -168,8 +168,11 @@ function computeStats(matches) {
     }
   }
   // ---- Elo：按时间顺序逐场更新，队伍实力取上场选手均值；胜负只和「对手多强」有关，和队友是谁无关 ----
+  // 顺手记两样东西：每场开打前的天辉期望胜率 ea（= 赛前预测，只用之前的比赛，可拿来回看预测准不准），以及每人每场打完后的 Elo（走势图）
   const elo = {};
   const R = pid => elo[pid] ?? ELO_BASE;
+  const preds = [];
+  let seq = 0;
   for (const m of sorted) {
     const rad = (m.radiant || []).map(s => s.pid), dire = (m.dire || []).map(s => s.pid);
     if (!rad.length || !dire.length || !m.winner) continue;
@@ -177,8 +180,11 @@ function computeStats(matches) {
     const ea = 1 / (1 + 10 ** ((rb - ra) / 400));
     const sa = m.winner === 'radiant' ? 1 : 0;
     const k = ELO_K * (useMov ? movFactor(matchScore(m)) : 1);
+    preds.push({ id: m.id, date: m.date, seq, ea, winner: m.winner, ra, rb, surprise: sa ? 1 - ea : ea });
     for (const x of rad) elo[x] = R(x) + k * (sa - ea);
     for (const x of dire) elo[x] = R(x) + k * ((1 - sa) - (1 - ea));
+    for (const x of [...rad, ...dire]) ps[x]?.eloHist.push({ id: m.id, date: m.date, seq, elo: elo[x], won: (m.winner === 'radiant') === rad.includes(x) });
+    seq++;
   }
   // ---- 相对 KDA：自己的 KDA ÷ 同号位平均 KDA（按自己各号位场次加权）。辅助天然 KDA 低，不该和核心混算 ----
   const allB = Object.values(posKda).reduce((o, b) => ({ ka: o.ka + b.ka, d: o.d + b.d, n: o.n + b.n }), { ka: 0, d: 0, n: 0 });
@@ -190,7 +196,33 @@ function computeStats(matches) {
     st.kdaExp = wsum ? exp / wsum : null;
     st.kdaRel = st.kdaG && st.kdaExp ? ((st.k + st.a) / Math.max(st.d, 1)) / st.kdaExp : null;
   }
-  return { players: ps, heroes, duos, total: matches.length, radiantWins, avgDuration: durN ? durSum / durN : null, elo, posKda };
+  for (const st of Object.values(ps)) {
+    st.eloPeak = st.eloHist.reduce((a, h) => Math.max(a, h.elo), ELO_BASE);
+    st.eloLow = st.eloHist.reduce((a, h) => Math.min(a, h.elo), ELO_BASE);
+  }
+  return { players: ps, heroes, duos, total: matches.length, radiantWins, avgDuration: durN ? durSum / durN : null, elo, posKda, preds, seqTotal: seq };
+}
+
+// ============ 赛前预测 ============
+/* 两队各取上场选手 Elo 均值，套 Elo 期望公式得天辉胜率。和 computeStats 里逐场更新用的是同一个公式，
+   所以统计页「预测回看」的准确率就是这个函数在历史上的真实表现。Elo 来自 st.elo（没打过的人按 1500） */
+function predictMatch(radPids, direPids, stPlayers) {
+  const R = pid => stPlayers[pid]?.elo ?? ELO_BASE;
+  const rad = radPids.filter(Boolean), dire = direPids.filter(Boolean);
+  if (!rad.length || !dire.length) return null;
+  const ra = rad.reduce((s, x) => s + R(x), 0) / rad.length, rb = dire.reduce((s, x) => s + R(x), 0) / dire.length;
+  const ea = 1 / (1 + 10 ** ((rb - ra) / 400));
+  const known = [...rad, ...dire].filter(pid => stPlayers[pid]?.g).length;
+  return { ea, ra, rb, known, total: rad.length + dire.length };
+}
+// 预测回看：只统计「有倾向」的比赛（赛前胜率偏离 50% 超过 margin），五五开的场次本来就没法说准不准
+function predictionReport(preds, margin = 0.05) {
+  const decisive = preds.filter(p => Math.abs(p.ea - 0.5) >= margin);
+  const hit = decisive.filter(p => (p.ea > 0.5) === (p.winner === 'radiant')).length;
+  const upsets = [...preds].filter(p => p.surprise > 0.5).sort((a, b) => b.surprise - a.surprise);
+  // Brier 分：预测概率与结果的均方差，0 最好，瞎猜 0.25；比准确率更能反映「有多自信」
+  const brier = preds.length ? preds.reduce((s, p) => s + ((p.winner === 'radiant' ? 1 : 0) - p.ea) ** 2, 0) / preds.length : null;
+  return { total: preds.length, decisive: decisive.length, hit, acc: decisive.length ? hit / decisive.length : null, upsets, brier };
 }
 const topKey = (obj, by = 'g') => Object.entries(obj).sort((a, b) => b[1][by] - a[1][by])[0]?.[0];
 
@@ -452,6 +484,7 @@ function renderPlayers() {
     ['radiant', 'dire'].forEach(t => ui.draft[t].forEach(s => { if (s) s.pos = defaultPos(t, s.pid); }));
     renderTeams(); toast('已随机分队');
   });
+  $('#btn-balance').addEventListener('click', balanceDraft);
   $('#btn-swap').addEventListener('click', () => {
     [ui.draft.radiant, ui.draft.dire] = [ui.draft.dire, ui.draft.radiant];
     if (ui.draft.winner) ui.draft.winner = ui.draft.winner === 'radiant' ? 'dire' : 'radiant';
@@ -516,6 +549,61 @@ function renderTeams() {
     </div>`).join('') : '<p class="empty" style="width:100%">选手池为空，先去「选手名单」添加。</p>';
   $('#win-radiant').classList.toggle('on', ui.draft.winner === 'radiant');
   $('#win-dire').classList.toggle('on', ui.draft.winner === 'dire');
+  renderPredict();
+}
+
+// ============ 赛前预测 / 均衡分队（记录页） ============
+// 两队都有人时在阵容下方显示：Elo 推算的胜率 + 两队综合评分均值。编辑旧比赛时 Elo 已包含这场本身，提示会偏向实际结果，所以只在新建时显示
+function renderPredict() {
+  const box = $('#predict'); if (!box) return;
+  const rad = ui.draft.radiant.filter(Boolean).map(s => s.pid), dire = ui.draft.dire.filter(Boolean).map(s => s.pid);
+  if (ui.editingMatch || !rad.length || !dire.length) { box.classList.add('hidden'); return; }
+  const st = computeStats(state.matches), P = playerMap(), so = loadScoreOpt();
+  const pr = predictMatch(rad, dire, st.players);
+  const avgScore = pids => pids.reduce((s, pid) => s + playerScore(st.players[pid], P.get(pid), so).score, 0) / pids.length;
+  const sa = avgScore(rad), sb = avgScore(dire);
+  const pa = Math.round(pr.ea * 100), pb = 100 - pa;
+  const fav = pa === pb ? '' : pa > pb ? 'radiant' : 'dire';
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="predict-bar" title="按两队上场选手的 Elo 均值推算（天辉 ${Math.round(pr.ra)} vs 夜魇 ${Math.round(pr.rb)}）。Elo 只看内战胜负和对手强弱，没打过的人按 1500 算"><span class="radiant" style="width:${pa}%">天辉 ${pa}%</span><span class="dire" style="width:${pb}%">${pb}% 夜魇</span></div>
+    <div class="hint">赛前预测${fav ? `：<span class="side ${fav}">${fav === 'radiant' ? '天辉' : '夜魇'}</span> 被看好` : '：五五开'}　·　综合评分均值 天辉 <b>${sa.toFixed(1)}</b> / 夜魇 <b>${sb.toFixed(1)}</b>${rad.length !== dire.length ? `　·　<span class="loss">${rad.length} v ${dire.length} 人数不等</span>` : ''}${pr.known < pr.total ? `　·　${pr.total - pr.known} 人无内战记录，按 1500 算` : ''}</div>`;
+}
+
+/* 均衡分队：把阵容里已选的人重新分成实力最接近的两队。
+   人数 ≤ 12 时枚举所有分法（C(12,6)/2 = 462 种），按「两队评分均值差 + 号位缺口惩罚」取最优；
+   最优的前几种里随机挑一种，连点几次能换出不同但同样均衡的分法。评分口径与统计页「评分」一致（含当前权重） */
+function balanceDraft() {
+  const chosen = [...ui.draft.radiant, ...ui.draft.dire].filter(Boolean);
+  if (chosen.length < 2) return toast('先选人再分队', 'err');
+  if (chosen.length > 12) return toast('最多 12 人', 'err');
+  const st = computeStats(state.matches).players, P = playerMap(), so = loadScoreOpt();
+  const info = chosen.map(s => { const p = P.get(s.pid); return { pid: s.pid, score: playerScore(st[s.pid], p, so).score, positions: p?.positions || [] }; });
+  const n = info.length, half = Math.ceil(n / 2);
+  const posGap = team => { const used = new Set(); [...team].sort((a, b) => a.positions.length - b.positions.length).forEach(m => { const w = m.positions.find(x => !used.has(x)); if (w) used.add(w); }); return Math.min(team.length, 5) - used.size; };
+  const avg = team => team.reduce((s, m) => s + m.score, 0) / team.length;
+  const results = [];
+  // 枚举包含第 0 人的 half 人子集（固定第 0 人在 A 队，避免 A/B 镜像重复）
+  const pick = (start, cur) => {
+    if (cur.length === half) {
+      const A = cur, B = info.filter(m => !cur.includes(m));
+      if (!B.length) return;
+      results.push({ A, B, cost: Math.abs(avg(A) - avg(B)) + (posGap(A) + posGap(B)) * 2 });
+      return;
+    }
+    for (let i = start; i < n && n - i >= half - cur.length; i++) pick(i + 1, [...cur, info[i]]);
+  };
+  if (n % 2 === 0) pick(1, [info[0]]); else pick(0, []);   // 奇数人数两队大小不同，没有镜像，全枚举
+  results.sort((a, b) => a.cost - b.cost);
+  const best = results[Math.floor(Math.random() * Math.min(results.length, 4))];
+  // 随机决定哪队当天辉，避免评分高的一队总在天辉
+  const [rad, dire] = Math.random() < 0.5 ? [best.A, best.B] : [best.B, best.A];
+  const prev = new Map(chosen.map(s => [s.pid, s]));
+  ui.draft.radiant = [null, null, null, null, null]; ui.draft.dire = [null, null, null, null, null];
+  rad.forEach((m, i) => { ui.draft.radiant[i] = { pid: m.pid, pos: 0, hero: prev.get(m.pid)?.hero || '' }; });
+  dire.forEach((m, i) => { ui.draft.dire[i] = { pid: m.pid, pos: 0, hero: prev.get(m.pid)?.hero || '' }; });
+  ['radiant', 'dire'].forEach(t => ui.draft[t].forEach(s => { if (s) s.pos = defaultPos(t, s.pid); }));
+  renderTeams();
+  toast(`已均衡分队：评分均值 ${avg(rad).toFixed(1)} vs ${avg(dire).toFixed(1)}（差 ${Math.abs(avg(rad) - avg(dire)).toFixed(1)}），再点一次换一种分法`, 'ok');
 }
 
 function autoMatchId(date) {
@@ -626,10 +714,12 @@ async function loadReplay(m, btn) {
 }
 const fmtClock = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 // 折线图（单轴）：series = [{ v: [], color }]，zero = 是否以 0 为中线并按正负分色（正 = 天辉领先）
+// v 里允许 null（该点无数据，折线在此断开——多人 Elo 走势里每人只从首场开始画）
 function lineChartSvg(id, series, { zero = false, yFmt = v => String(v), height = 150, pct = false } = {}) {
   const W = 640, H = height, L = 46, R = 10, T = 10, B = 22;
   const n = Math.max(...series.map(s => s.v.length)); if (n < 2) return '<p class="hint">数据不足</p>';
-  const all = series.flatMap(s => s.v);
+  const all = series.flatMap(s => s.v).filter(v => v != null);
+  if (!all.length) return '<p class="hint">数据不足</p>';
   let lo = Math.min(...all), hi = Math.max(...all);
   if (pct) { lo = 0; hi = 100; } else if (zero) { const m = Math.max(Math.abs(lo), Math.abs(hi), 1); lo = -m; hi = m; } else if (lo === hi) { lo -= 1; hi += 1; }
   const x = i => L + (W - L - R) * i / (n - 1), y = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
@@ -638,12 +728,27 @@ function lineChartSvg(id, series, { zero = false, yFmt = v => String(v), height 
   const step = Math.max(1, Math.round(n / 8)); const xt = []; for (let i = 0; i < n; i += step) xt.push(i);
   if (n - 1 - xt[xt.length - 1] >= step / 2) xt.push(n - 1); else xt[xt.length - 1] = n - 1;   // 末尾刻度太挤就并成一个
   const xlab = xt.map(i => `<text x="${x(i).toFixed(1)}" y="${H - 6}" class="tick" text-anchor="middle">${i}</text>`).join('');
-  const path = v => v.map((val, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(val).toFixed(1)}`).join('');
+  const path = v => { let d = '', pen = false; v.forEach((val, i) => { if (val == null) { pen = false; return; } d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(val).toFixed(1)}`; pen = true; }); return d; };
   const lines = series.map((s, si) => zero
     ? `<clipPath id="${id}-up${si}"><rect x="0" y="0" width="${W}" height="${y(0).toFixed(1)}"/></clipPath><clipPath id="${id}-dn${si}"><rect x="0" y="${y(0).toFixed(1)}" width="${W}" height="${H}"/></clipPath>
        <path d="${path(s.v)}" class="ln" stroke="#6fa52c" clip-path="url(#${id}-up${si})"/><path d="${path(s.v)}" class="ln" stroke="#d0463b" clip-path="url(#${id}-dn${si})"/>`
     : `<path d="${path(s.v)}" class="ln" stroke="${s.color}"/>`).join('');
   return `<svg class="rp-chart" id="${id}" viewBox="0 0 ${W} ${H}" data-n="${n}" data-l="${L}" data-r="${R}" role="img">${grid}${xlab}${lines}<line class="cross hidden" y1="${T}" y2="${H - B}" x1="0" x2="0"/><g class="dots"></g></svg>`;
+}
+// 通用悬停：容器里所有 .rp-chart 共用一个 X 索引，tipHtml(i) 返回提示内容；提示框绝对定位在 container 内
+function bindChartHover(container, tip, tipHtml) {
+  const charts = Array.from(container.querySelectorAll('.rp-chart'));
+  const show = (svg, evt) => {
+    const rect = svg.getBoundingClientRect(); const n = Number(svg.dataset.n), L = Number(svg.dataset.l), R = Number(svg.dataset.r);
+    const px = (evt.clientX - rect.left) / rect.width * 640; const i = Math.max(0, Math.min(n - 1, Math.round((px - L) / (640 - L - R) * (n - 1))));
+    const xx = L + (640 - L - R) * i / (n - 1);
+    charts.forEach(c => { const cl = c.querySelector('.cross'); cl.classList.remove('hidden'); cl.setAttribute('x1', xx); cl.setAttribute('x2', xx); });
+    const html = tipHtml(i); if (!html) { tip.classList.add('hidden'); return; }
+    tip.classList.remove('hidden'); tip.innerHTML = html;
+    const box = container.getBoundingClientRect();
+    tip.style.left = Math.min(evt.clientX - box.left + 14, box.width - 190) + 'px'; tip.style.top = (evt.clientY - box.top + 14) + 'px';
+  };
+  charts.forEach(c => { c.addEventListener('pointermove', e => show(c, e)); c.addEventListener('pointerleave', () => { tip.classList.add('hidden'); charts.forEach(x => x.querySelector('.cross').classList.add('hidden')); }); });
 }
 function showReplayModal(m) {
   const rp = m.replay; if (!rp) return;
@@ -864,6 +969,52 @@ function renderStats() {
   const worstDuos = [...allDuos].sort((a, b) => pctNum(a.w, a.g) - pctNum(b.w, b.g) || b.g - a.g).slice(0, 15);
   $('#duo-table tbody').innerHTML = bestDuos.length ? bestDuos.map(duoRow).join('') : duoEmpty;
   $('#duo-worst-table tbody').innerHTML = worstDuos.length ? worstDuos.map(duoRow).join('') : duoEmpty;
+
+  renderEloChart(st, rows, P);
+  renderPredictionReport(st, P);
+}
+
+// ---- Elo 走势（出场最多的 8 人）：横轴 = 筛选范围内的比赛先后（seq），没上场的比赛沿用上一场的值，首场之前不画 ----
+const CHART_COLORS = ['#e0a83a', '#7fb135', '#d0463b', '#4ea1e0', '#b07be0', '#e07bb0', '#5fcfc0', '#c9c04a'];
+function renderEloChart(st, rows, P) {
+  const box = $('#elo-chart'), legend = $('#elo-legend'); if (!box) return;
+  const top = [...rows].sort((a, b) => b.g - a.g || b.elo - a.elo).slice(0, 8);
+  const n = st.seqTotal;
+  if (!top.length || n < 2) { box.innerHTML = '<p class="hint">至少要有 2 场比赛</p>'; legend.innerHTML = ''; return; }
+  const series = top.map((s, i) => {
+    const v = new Array(n).fill(null); let cur = null, j = 0;
+    for (let q = 0; q < n; q++) { while (j < s.eloHist.length && s.eloHist[j].seq === q) { cur = s.eloHist[j].elo; j++; } v[q] = cur; }
+    return { v, color: CHART_COLORS[i % CHART_COLORS.length], pid: s.pid, hist: s.eloHist };
+  });
+  legend.innerHTML = series.map(s => `<span class="lg"><i style="background:${s.color}"></i>${esc(pname(P, s.pid))} <b>${Math.round(st.players[s.pid].elo)}</b></span>`).join('');
+  box.innerHTML = lineChartSvg('elo-svg', series, { height: 220, yFmt: v => String(Math.round(v)) });
+  const bySeq = new Map(st.preds.map(p => [p.seq, p]));
+  bindChartHover(box.closest('.chart-box'), $('#elo-tip'), i => {
+    const m = bySeq.get(i);
+    const lines = series.filter(s => s.v[i] != null).map(s => { const h = s.hist.find(x => x.seq === i); return `<div><span style="color:${s.color}">${esc(pname(P, s.pid))}${h ? (h.won ? ' <span class="win">胜</span>' : ' <span class="loss">负</span>') : ''}</span><b>${Math.round(s.v[i])}</b></div>`; });
+    return `<b>第 ${i + 1} 场</b> <span class="hint">${m ? `${esc(m.date)} · ${esc(m.id)}` : ''}</span>${lines.join('')}`;
+  });
+}
+
+// ---- 预测回看：准确率、Brier 分、爆冷榜 ----
+function renderPredictionReport(st, P) {
+  const box = $('#pred-overview'), tb = $('#upset-table tbody'); if (!box) return;
+  const r = predictionReport(st.preds);
+  const top = r.upsets[0];
+  box.innerHTML = [
+    ['预测准确率', r.acc != null ? pct(r.hit, r.decisive) : '-', r.decisive ? `有倾向的 ${r.decisive} 场里猜中 ${r.hit} 场（赛前胜率偏离 50% 不足 5% 的 ${r.total - r.decisive} 场不算）` : '赛前都是五五开，没法评估'],
+    ['Brier 分', r.brier != null ? r.brier.toFixed(3) : '-', '预测概率与结果的均方差：0 最好，瞎猜 0.25，越低说明预测越有把握且准'],
+    ['爆冷场次', r.upsets.length, r.total ? `占 ${pct(r.upsets.length, r.total)}，被看低的一方赢了` : ''],
+    ['最大爆冷', top ? esc(top.id) : '-', top ? `${esc(top.date)} · 赛前只给 ${Math.round((1 - top.surprise) * 100)}% 的${top.winner === 'radiant' ? '天辉' : '夜魇'}赢了` : ''],
+  ].map(([k, v, s]) => `<div class="stat-tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('');
+  const byId = new Map(state.matches.map(m => [m.id, m]));
+  tb.innerHTML = r.upsets.slice(0, 10).map(u => { const m = byId.get(u.id); const pa = Math.round(u.ea * 100); return `<tr>
+    <td>${esc(u.date)}</td><td><strong>${esc(u.id)}</strong></td>
+    <td title="天辉 Elo 均值 ${Math.round(u.ra)} vs 夜魇 ${Math.round(u.rb)}"><span class="side radiant">天辉 ${pa}%</span> <span class="side dire">夜魇 ${100 - pa}%</span></td>
+    <td><span class="side ${u.winner}">${u.winner === 'radiant' ? '天辉胜' : '夜魇胜'}</span></td>
+    <td class="num"><strong>${Math.round(u.surprise * 100)}%</strong><span class="bar" style="width:${Math.round((u.surprise - 0.5) * 80)}px"></span></td>
+    <td class="wrap">${m ? lineupHtml(P, m.radiant, m.winner === 'radiant') : '-'}</td><td class="wrap">${m ? lineupHtml(P, m.dire, m.winner === 'dire') : '-'}</td>
+  </tr>`; }).join('') || '<tr><td colspan="7" class="empty">还没有爆冷：要么预测全中，要么场次太少</td></tr>';
 }
 
 // ============ 选手详情弹窗 ============
@@ -887,6 +1038,7 @@ function showPlayerDetail(pid) {
       <div class="stat-tile"><div class="k">胜率</div><div class="v">${pct(st.w, st.g)}</div><div class="s">${st.streak > 0 ? `当前 ${st.streak} 连胜` : st.streak < 0 ? `当前 ${-st.streak} 连败` : ''}</div></div>
       <div class="stat-tile"><div class="k">天辉</div><div class="v">${pct(st.rw, st.rg)}</div><div class="s">${st.rw}/${st.rg}</div></div>
       <div class="stat-tile"><div class="k">夜魇</div><div class="v">${pct(st.dw, st.dg)}</div><div class="s">${st.dw}/${st.dg}</div></div>
+      <div class="stat-tile" title="对手加权 Elo：所有人从 1500 起步，赢强队加得多、输弱队扣得多"><div class="k">Elo</div><div class="v">${Math.round(st.elo)}</div><div class="s">最高 ${Math.round(st.eloPeak)} · 最低 ${Math.round(st.eloLow)}</div></div>
       ${st.kdaG ? `<div class="stat-tile"><div class="k">场均 KDA</div><div class="v">${((st.k + st.a) / Math.max(1, st.d)).toFixed(2)}</div><div class="s">${(st.k / st.kdaG).toFixed(1)} / ${(st.d / st.kdaG).toFixed(1)} / ${(st.a / st.kdaG).toFixed(1)} · ${st.kdaG} 场</div></div>` : ''}
     </div>
     <div class="grid2">
@@ -895,8 +1047,10 @@ function showPlayerDetail(pid) {
       <div><h4>队友（同队时的胜率）</h4>${tbl(['队友', '#同队', '#胜', '#胜率'], mates, '-')}</div>
       <div><h4>对手（对阵时的胜率）</h4>${tbl(['对手', '#对阵', '#胜', '#胜率'], opps, '-')}</div>
     </div>
+    ${st.eloHist.length >= 2 ? `<h4>Elo 走势 <span class="hint" style="text-transform:none">横轴是自己的第几场，悬停看那场的结果</span></h4><div id="pd-chart">${lineChartSvg('pd-elo', [{ v: st.eloHist.map(h => h.elo), color: '#e0a83a' }], { height: 160, yFmt: v => String(Math.round(v)) })}</div><div id="pd-tip" class="rp-tip hidden"></div>` : ''}
     <h4>最近比赛 <span class="hint" style="text-transform:none">点比赛 ID 展开详情</span></h4>${tbl(['日期', '比赛 ID', '阵营', '位置', '英雄', 'K/D/A', '结果'], recent, '-')}
   `);
+  if ($('#pd-chart')) bindChartHover($('#modal-content'), $('#pd-tip'), i => { const h = st.eloHist[i]; return h ? `<b>第 ${i + 1} 场</b> <span class="hint">${esc(h.date)} · ${esc(h.id)}</span><div><span>${h.won ? '<span class="win">胜</span>' : '<span class="loss">负</span>'}</span><b>${Math.round(h.elo)}</b></div>` : ''; });
   // 点比赛 ID：在该行下方展开 / 收起完整对阵
   $('#modal-content').onclick = e => {
     const b = e.target.closest('button[data-act]'); if (!b) return;
@@ -1528,8 +1682,9 @@ async function importLeagueMatches(leagueId) {
   if (ok) toast(`已导入 ${ok} 场比赛`, 'ok');
 }
 // 把解析后的比赛写入 state：按 Steam ID 匹配选手，缺的按需新建；两队都至少要有一名可识别选手
-function importParsedMatch(parsed, { leagueId, autoNew }) {
+function importParsedMatch(parsed, { leagueId, autoNew, source }) {
   let created = 0;
+  const label = source || `联赛 ${leagueId} 导入`;
   const side = rows => rows.map(r => {
     let p = r.accountId ? state.players.find(x => x.accountId === r.accountId) : null;
     if (!p && !r.hidden && !r.anon) { const n = r.name.toLowerCase(); p = state.players.find(x => !x.accountId && x.name.toLowerCase() === n); if (p && r.accountId) p.accountId = r.accountId; }
@@ -1537,20 +1692,122 @@ function importParsedMatch(parsed, { leagueId, autoNew }) {
       if (!autoNew) return null;
       const rk = rankFromTier(r.rankTier);
       let name = r.name, k = 2; while (state.players.some(x => x.name === name)) name = `${r.name}(${k++})`;
-      p = { id: uid(), createdAt: Date.now(), name, rank: rk ? rk.rank : '传奇', stars: rk ? rk.stars : 3, positions: [r.pos], heroes: r.hero ? [r.hero] : [], note: (r.anon || r.hidden) ? '联赛导入，昵称未公开，请改成真实昵称' : '联赛导入', accountId: r.accountId };
+      p = { id: uid(), createdAt: Date.now(), name, rank: rk ? rk.rank : '传奇', stars: rk ? rk.stars : 3, positions: [r.pos], heroes: r.hero ? [r.hero] : [], note: (r.anon || r.hidden) ? `${label}，昵称未公开，请改成真实昵称` : label, accountId: r.accountId };
       state.players.push(p); created++;
     }
     const o = { pid: p.id, pos: r.pos, hero: r.hero }; if (r.kda) o.kda = r.kda; return o;
   }).filter(Boolean);
   const radiant = side(parsed.radiant), dire = side(parsed.dire);
   if (!radiant.length || !dire.length) throw new Error('两队都没有可识别的选手（未勾选自动新建）');
-  const match = { id: parsed.id, date: parsed.date, duration: parsed.duration, note: `联赛 ${leagueId} 导入 · 比分 ${parsed.score.join(':')}`, radiant, dire, winner: parsed.winner, createdAt: Date.now(), leagueId: Number(leagueId) };
+  const match = { id: parsed.id, date: parsed.date, duration: parsed.duration, note: `${label} · 比分 ${parsed.score.join(':')}`, radiant, dire, winner: parsed.winner, createdAt: Date.now() };
+  if (leagueId) match.leagueId = Number(leagueId);
   if (parsed.score.every(x => Number.isFinite(Number(x)))) match.score = parsed.score.map(Number);
   const i = state.matches.findIndex(m => m.id === match.id);
   if (i >= 0) state.matches[i] = { ...match, createdAt: state.matches[i].createdAt }; else state.matches.push(match);
   return { created };
 }
 $('#btn-league').addEventListener('click', openLeagueImport);
+
+// ============ 发现未记录的内战 ============
+/* 按名单里绑定了 Steam ID 的选手，各拉 OpenDota 最近 20 场，按比赛 ID 归并；同一场里出现 ≥ N 名名单选手且尚未记录的就是漏记的内战。
+   OpenDota 匿名限额 60 次/分钟，逐人串行 + 间隔，撞 429 就停。拉不到的情况：选手资料私密（OpenDota 看不到比赛）、还没绑 Steam ID */
+const DISCOVER_MIN_KEY = 'dota-discover-min';
+const discoverCache = new Map();   // accountId → { at, recent }
+let discoverStop = false;
+async function fetchRecent(accountId) {
+  const hit = discoverCache.get(accountId) || ladderCache.get(accountId);
+  if (hit && hit.recent && Date.now() - hit.at < LADDER_TTL) return hit.recent;
+  const c = new AbortController(); const t = setTimeout(() => c.abort(), 15000);
+  try {
+    const res = await fetch(`${OPENDOTA}/players/${accountId}/recentMatches`, { signal: c.signal });
+    if (res.status === 429) throw Object.assign(new Error('OpenDota 限流（每分钟 60 次），等一分钟再继续'), { rate: true });
+    if (!res.ok) throw new Error('返回 ' + res.status);
+    const recent = await res.json();
+    discoverCache.set(accountId, { at: Date.now(), recent });
+    return recent;
+  } finally { clearTimeout(t); }
+}
+function openDiscover() {
+  const bound = state.players.filter(p => p.accountId);
+  if (!bound.length) return toast('没有选手绑定 Steam ID，先在「选手名单」填好友代码', 'err');
+  const minKnown = Math.min(10, Math.max(2, Number(localStorage.getItem(DISCOVER_MIN_KEY)) || 6));
+  showModal(`<h2>发现内战 <span class="hint">找出漏记的比赛</span></h2>
+    <p class="hint">按 ${bound.length} 名已绑定 Steam ID 的选手，各拉 OpenDota 最近 20 场；同一场里出现足够多名单选手、且还没记录的，就列出来一键导入。资料私密的选手拉不到自己的场，但只要同场有别人公开就仍能发现。</p>
+    <div class="row wrap" style="align-items:flex-end">
+      <label class="narrow" title="同一场里至少要有几名名单选手才算内战；人少时调低">同场名单选手 ≥<input type="number" id="dc-min" min="2" max="10" value="${minKnown}"></label>
+      <label class="inline hint" style="margin-bottom:6px"><input type="checkbox" id="dc-auto"> 全部导入时，未识别的玩家自动新建选手</label>
+      <button type="button" class="primary" id="dc-run">开始扫描</button>
+      <button type="button" class="ghost hidden" id="dc-stop">停止</button>
+    </div>
+    <div id="dc-progress" class="hint" style="margin-top:8px"></div>
+    <div id="dc-result" style="margin-top:8px"></div>`);
+  $('#dc-run').onclick = () => runDiscover(bound);
+  $('#dc-stop').onclick = () => { discoverStop = true; };
+  $('#dc-min').onchange = e => localStorage.setItem(DISCOVER_MIN_KEY, String(Math.min(10, Math.max(2, Number(e.target.value) || 6))));
+}
+async function runDiscover(bound) {
+  const prog = $('#dc-progress'), out = $('#dc-result'), run = $('#dc-run'), stop = $('#dc-stop');
+  run.disabled = true; stop.classList.remove('hidden'); discoverStop = false; out.innerHTML = '';
+  const found = new Map();   // match_id → { id, start, duration, lobby, mode, who: Map(pid → rad) }
+  const errs = []; let done = 0, rate = false;
+  for (const p of bound) {
+    if (discoverStop || !$('#dc-progress')) break;
+    prog.textContent = `扫描中 ${done + 1}/${bound.length}：${p.name}…`;
+    try {
+      const recent = await fetchRecent(p.accountId);
+      for (const m of recent || []) {
+        const id = String(m.match_id);
+        const e = found.get(id) || { id, start: m.start_time, duration: m.duration, lobby: m.lobby_type, mode: m.game_mode, who: new Map() };
+        e.who.set(p.id, m.player_slot < 128); found.set(id, e);
+      }
+    } catch (e) { errs.push(`${p.name}：${e.name === 'AbortError' ? '超时' : e.message}`); if (e.rate) { rate = true; break; } }
+    done++;
+    if (done < bound.length) await new Promise(r => setTimeout(r, 300));
+  }
+  if (!$('#dc-progress')) return;   // 弹窗已关
+  run.disabled = false; stop.classList.add('hidden');
+  const min = Math.min(10, Math.max(2, Number($('#dc-min').value) || 6));
+  const known = new Set(state.matches.map(m => m.id));
+  const all = [...found.values()].filter(e => e.who.size >= min).sort((a, b) => b.start - a.start);
+  const cands = all.filter(e => !known.has(e.id));
+  prog.innerHTML = `扫了 ${done}/${bound.length} 人${discoverStop ? '（已停止）' : rate ? '（<span class="loss">被限流，中断</span>）' : ''}：同场 ≥ ${min} 名名单选手的比赛 ${all.length} 场，其中 <b>${cands.length}</b> 场还没记录。${errs.length ? `<div class="loss">${errs.map(esc).join('；')}</div>` : ''}`;
+  const P = playerMap();
+  const names = e => [...e.who.entries()].map(([pid, rad]) => `<span class="side ${rad ? 'radiant' : 'dire'}">${esc(pname(P, pid))}</span>`).join(' ');
+  out.innerHTML = cands.length ? `<div class="inline-actions" style="margin-bottom:6px"><button type="button" class="primary" id="dc-all">全部导入（${cands.length} 场）</button><span class="hint">逐场拉完整数据后直接保存；想逐场核对就点单场的「导入」</span></div>
+    <div class="table-wrap"><table class="tbl"><thead><tr><th>时间</th><th>模式</th><th class="num">时长</th><th>名单选手</th><th>比赛 ID</th><th></th></tr></thead><tbody>${cands.map(e => `<tr data-mid="${e.id}">
+      <td><span title="${fmtTs(e.start)}">${fmtAgo(e.start)}</span><div class="hint">${fmtTs(e.start).slice(0, 10)}</div></td>
+      <td>${esc(GAME_MODE_NAME[e.mode] ?? `模式 ${e.mode}`)}<div class="hint">${esc(LOBBY_NAME[e.lobby] ?? `类型 ${e.lobby}`)}</div></td>
+      <td class="num">${fmtDur(e.duration)}</td>
+      <td class="wrap">${names(e)} <span class="hint">${e.who.size} 人</span></td>
+      <td><a href="https://www.opendota.com/matches/${e.id}" target="_blank" rel="noopener" class="hint">${e.id}</a></td>
+      <td><button type="button" class="mini" data-act="dc-import" data-mid="${e.id}">导入</button></td></tr>`).join('')}</tbody></table></div>` : (all.length ? '<p class="empty">这些比赛都已经记录过了。</p>' : '<p class="empty">没找到。可以把「同场名单选手」调低，或者先给更多选手绑定 Steam ID。</p>');
+  out.onclick = e => {
+    const b = e.target.closest('button[data-act=dc-import]'); if (!b) return;
+    hideModal(); $('#m-id').value = b.dataset.mid; switchTab('record'); window.scrollTo({ top: 0 }); fetchOpenDota();
+  };
+  const allBtn = $('#dc-all');
+  if (allBtn) allBtn.onclick = async () => {
+    const autoNew = $('#dc-auto').checked;
+    allBtn.disabled = true; discoverStop = false; stop.classList.remove('hidden');
+    let ok = 0, created = 0; const fails = [];
+    for (const e of cands) {
+      if (discoverStop || !$('#dc-result')) break;
+      const tr = out.querySelector(`tr[data-mid="${e.id}"]`); const cell = tr?.lastElementChild;
+      if (cell) cell.innerHTML = '<span class="hint">拉取中…</span>';
+      try {
+        const { m } = await fetchMatchRaw(e.id);
+        const r = importParsedMatch(parseOpenDotaMatch(m), { autoNew, source: '自动发现' });
+        ok++; created += r.created; if (cell) cell.innerHTML = '<span class="win">已导入</span>';
+      } catch (err) { fails.push(`${e.id}：${err.message || err}`); if (cell) cell.innerHTML = `<span class="loss" title="${esc(err.message || err)}">失败</span>`; }
+    }
+    stop.classList.add('hidden');
+    if (ok) { save(); renderMatches(); }
+    toast(`导入 ${ok} 场${created ? `，新建 ${created} 名选手` : ''}${fails.length ? `，失败 ${fails.length} 场` : ''}`, ok ? 'ok' : 'err');
+    if (fails.length && $('#dc-progress')) prog.innerHTML += `<div class="loss">${fails.map(esc).join('；')}</div>`;
+    if (ok && $('#dc-progress')) prog.innerHTML += `<div class="hint">已导入的比赛位置按分路 + GPM 推测，可到比赛列表「编辑」核对；未识别且未勾选自动新建的玩家已跳过。</div>`;
+  };
+}
+$('#btn-discover').addEventListener('click', openDiscover);
 
 $('#btn-opendota').addEventListener('click', fetchOpenDota);
 $('#btn-proxy-cfg').addEventListener('click', configProxy);

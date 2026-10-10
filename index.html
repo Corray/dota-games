@@ -111,6 +111,7 @@
       <h2 id="match-form-title">新比赛</h2>
       <div class="inline-actions">
         <button type="button" class="ghost" id="btn-shuffle" title="把已选中的选手随机重新分成两队">随机分队</button>
+        <button type="button" class="ghost" id="btn-balance" title="把已选中的选手分成实力最接近的两队（按统计页「评分」口径），并尽量凑齐 1-5 号位；连点可换一种分法">均衡分队</button>
         <button type="button" class="ghost" id="btn-swap" title="天辉 / 夜魇 阵营互换">交换阵营</button>
         <button type="button" class="ghost" id="btn-clear-teams">清空阵容</button>
       </div>
@@ -148,6 +149,7 @@
         <div class="slots"></div>
       </div>
     </div>
+    <div id="predict" class="predict hidden"></div>
 
     <div class="pool-head">
       <h3>选手池 <span class="hint">点击加入当前高亮的队伍，再点一次移出</span></h3>
@@ -176,6 +178,7 @@
         <select id="mf-player"><option value="">全部选手</option></select>
         <input id="mf-q" type="search" placeholder="搜索比赛 ID / 英雄 / 备注">
         <button type="button" id="btn-league" title="输入联赛 ID，拉取该联赛全部比赛并批量导入（经中转）">联赛导入</button>
+        <button type="button" id="btn-discover" title="按选手绑定的 Steam ID 扫 OpenDota 最近比赛，找出多名名单选手同场、但还没记录的内战，一键导入">发现内战</button>
       </div>
     </div>
     <div class="table-wrap">
@@ -205,6 +208,24 @@
       </div>
     </div>
     <div class="overview" id="overview"></div>
+  </div>
+
+  <div class="card chart-box">
+    <h3>Elo 走势 <span class="hint">出场最多的 8 人，横轴是比赛先后；悬停看每场打完后的 Elo。所有人从 1500 起步，赢强队加得多、输弱队扣得多</span></h3>
+    <div id="elo-legend" class="chart-legend"></div>
+    <div id="elo-chart"></div>
+    <div id="elo-tip" class="rp-tip hidden"></div>
+  </div>
+
+  <div class="card">
+    <h3>预测回看 <span class="hint">每场开打前用当时的 Elo 推算胜率（只用之前的比赛，不偷看结果），看评分到底准不准；爆冷 = 被看低的一方赢了</span></h3>
+    <div class="overview" id="pred-overview"></div>
+    <div class="table-wrap" style="margin-top:10px">
+      <table class="tbl" id="upset-table">
+        <thead><tr><th>日期</th><th>比赛 ID</th><th>赛前预测</th><th>结果</th><th class="num">爆冷程度</th><th>天辉</th><th>夜魇</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 
   <div class="card">
