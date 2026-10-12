@@ -531,3 +531,18 @@ tr.ld-same td{color:var(--muted)}
 #badge-board .v .name-btn{font-size:16px;font-weight:700}
 .bp-cand i.rec{color:var(--accent);font-size:10px}
 .bp-slot-pool .rec{color:var(--accent);margin-left:3px;font-size:10px}
+
+/* 团战条带图 */
+.fight-strip{width:100%;height:auto;display:block;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin:4px 0 8px}
+.fight-strip .grid{stroke:var(--border);stroke-width:1}
+.fight-strip .tick{fill:var(--muted);font-size:11px}
+.fight-strip .k.radiant{fill:var(--radiant);opacity:.6}
+.fight-strip .k.dire{fill:var(--dire);opacity:.6}
+.fight-strip .f{cursor:default}
+.fight-strip .f.radiant{fill:var(--radiant)}
+.fight-strip .f.dire{fill:var(--dire)}
+.fight-strip .f.even{fill:var(--muted);opacity:.7}
+/* 赛事奖项 */
+.award-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.award-list .award-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.award-list .award-row b{min-width:5em}

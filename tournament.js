@@ -644,10 +644,37 @@ function viewBoard(t) {
     <div class="table-wrap"><table class="tbl"><thead><tr><th>#</th><th>队伍</th><th>成员</th><th>平均段位</th></tr></thead><tbody>
     ${order.map((id, i) => { const tm = teamOf(t, id); return `<tr><td>${medal[i] || i + 1}</td><td><strong>${esc(tname(t, id))}</strong></td><td class="wrap">${tm ? tm.players.filter(Boolean).map(pid => esc(pname(P, pid))).join('、') : ''}</td><td>${tm ? rankText(avgRank(tm, P)) : ''}</td></tr>`; }).join('')}
     </tbody></table></div>
+    ${awardsHtml(t, ms, order, P)}
     <h3 style="margin-top:16px">已关联的详细记录 <span class="count">${ms.length}</span> <span class="hint">这些比赛同时计入「统计」页</span></h3>
     ${top.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>选手</th><th class="num">局</th><th class="num">胜</th><th class="num">胜率</th></tr></thead><tbody>${top.map(([pid, o]) => `<tr><td>${esc(pname(P, pid))}</td><td class="num">${o.g}</td><td class="num">${o.w}</td><td class="num">${Math.round(o.w / o.g * 100)}%</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">还没有关联任何详细记录。在系列赛里点「录入本局」或「关联已有记录」。</p>'}
     ${(() => { const subs = allSubs(t); return `<h3 style="margin-top:16px">替补出场记录 <span class="count">${subs.length}</span></h3>
       ${subs.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>阶段</th><th>轮次</th><th>对阵</th><th>局</th><th>队伍</th><th>缺席</th><th>替补</th></tr></thead><tbody>${subs.map(x => `<tr><td>${esc(x.stage)}</td><td>${esc(x.round)}</td><td>${esc(x.vs)}</td><td>第 ${x.game} 局</td><td>${esc(x.team)}</td><td>${x.out ? esc(pname(P, x.out)) : '<span class="hint">—</span>'}</td><td><b>${esc(pname(P, x.in))}</b></td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">还没有替补出场。在系列赛弹窗的「本局替补」里选缺席选手和替补，记分时会记在那一局。</p>'}`; })()}`;
+}
+
+// ============ 赛事奖项 ============
+/* 只看已关联详细记录的局。MVP = 胜场最多，并列比胜率、再比相对 KDA；黑马 = 实际名次比「按平均段位排的预期名次」高得最多的队伍；
+   其余称号直接复用统计页的称号逻辑（一血 / 翻盘 / 对线 / 团战等），但只在赛事范围内算 */
+function awardsHtml(t, ms, order, P) {
+  if (!ms.length) return '';
+  const st = A.computeStats(ms);
+  const players = Object.values(st.players).filter(s => P.has(s.pid) && s.g);
+  const tiles = [];
+  if (players.length) {
+    const mvp = [...players].sort((a, b) => b.w - a.w || (b.w / b.g) - (a.w / a.g) || (b.kdaRel || 0) - (a.kdaRel || 0))[0];
+    tiles.push(['🏆', t.status === 'done' ? '赛事 MVP' : '当前 MVP', esc(pname(P, mvp.pid)), `${mvp.w} 胜 ${mvp.g - mvp.w} 负${mvp.kdaG ? ` · KDA ${((mvp.k + mvp.a) / Math.max(1, mvp.d)).toFixed(2)}` : ''}`]);
+  }
+  if (order.length >= 3) {
+    const avgRank = id => { const ps = (teamOf(t, id)?.players || []).filter(pid => P.has(pid)); return ps.length ? ps.reduce((s, pid) => s + rankIdx(P.get(pid)), 0) / ps.length : 0; };
+    const expected = [...order].sort((a, b) => avgRank(b) - avgRank(a));
+    const horse = order.map((id, actual) => ({ id, gain: expected.indexOf(id) - actual, actual })).sort((a, b) => b.gain - a.gain)[0];
+    if (horse && horse.gain > 0) tiles.push(['🐴', '黑马', esc(tname(t, horse.id)), `按段位预期第 ${horse.actual + horse.gain + 1}，实际第 ${horse.actual + 1}`]);
+  }
+  const badges = A.computeBadges(st, ms);
+  const rows = Object.entries(badges).filter(([pid]) => P.has(pid)).sort((a, b) => b[1].length - a[1].length);
+  if (!tiles.length && !rows.length) return '';
+  return `<h3 style="margin-top:16px">奖项 <span class="hint">只看已关联详细记录的局${t.status === 'done' ? '' : '，赛事进行中会随时变'}</span></h3>
+    ${tiles.length ? `<div class="overview">${tiles.map(([icon, k, v, s]) => `<div class="stat-tile"><div class="k">${icon} ${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('')}</div>` : ''}
+    ${rows.length ? `<div class="award-list">${rows.map(([pid, list]) => `<div class="award-row"><b>${esc(pname(P, pid))}</b>${A.badgesHtml(list, true)}</div>`).join('')}</div>` : ''}`;
 }
 
 // ============ 替补 ============

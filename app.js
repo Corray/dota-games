@@ -203,9 +203,97 @@ function computeStats(matches) {
   return { players: ps, heroes, duos, total: matches.length, radiantWins, avgDuration: durN ? durSum / durN : null, elo, posKda, preds, seqTotal: seq };
 }
 
-// ============ 称号（成就徽章） ============
-/* 每个称号只给当前最强的人（并列都给），样本不够就空缺。录像类（一血 / 翻盘）只看点过「详情解析」的比赛，解析率低时会偏向被解析过的场 */
+// ============ 录像解析聚合 ============
+/* 把已解析比赛里每个人的对线期 / 击杀数据跨场汇总，只看点过「详情解析」或自动解析过的比赛。
+   英雄 ↔ 选手的对应：先按 Steam ID，再按英雄名。对线胜负：对线期（约 10 分钟）自己这条路双方净资产之和相比，
+   领先 ≥ LANE_EDGE 算赢、落后 ≥ LANE_EDGE 算输，中间算平。击杀参与率 = (击杀 + 助攻) ÷ 本方总击杀，助攻取比赛记录里的 KDA */
+const LANE_EDGE = 300;
 const COMEBACK_GOLD = 5000;   // 赢的一方曾落后这么多经济才算翻盘
+function replayPid(m, rp, h, P) {
+  const info = rp.heroes.find(x => x.h === h); if (!info) return null;
+  const side = m[info.r ? 'radiant' : 'dire'] || [];
+  const p = (info.acc && side.find(s => P.get(s.pid)?.accountId === info.acc)) || side.find(s => s.hero === (HERO_BY_ID[h] || ''));
+  return p?.pid || null;
+}
+function replayStats(matches) {
+  const P = playerMap();
+  const ps = {};
+  const getP = pid => ps[pid] ||= { pid, g: 0, laneG: 0, laneW: 0, laneL: 0, laneGold: 0, lh: 0, dn: 0, nw: 0, lvl: 0, k: 0, d: 0, kp: 0, kpN: 0, fb: 0, fbDeath: 0, cb: 0, cbMax: 0, fights: 0, fightsW: 0 };
+  let games = 0;
+  for (const m of matches) {
+    const rp = m.replay; if (!rp || !rp.heroes) continue;
+    games++;
+    const pidOf = h => replayPid(m, rp, h, P);
+    for (const side of ['radiant', 'dire']) for (const s of m[side] || []) getP(s.pid).g++;
+    for (const l of rp.lanes || []) {
+      const sum = arr => arr.reduce((s, x) => s + (x.nw || 0), 0);
+      const diff = sum(l.rad) - sum(l.dire);
+      for (const [arr, sign] of [[l.rad, 1], [l.dire, -1]]) for (const x of arr) {
+        const pid = pidOf(x.h); if (!pid) continue; const st = getP(pid);
+        const d = diff * sign;
+        st.laneG++; if (d >= LANE_EDGE) st.laneW++; else if (d <= -LANE_EDGE) st.laneL++;
+        st.laneGold += d; st.lh += x.lh || 0; st.dn += x.dn || 0; st.nw += x.nw || 0; st.lvl += x.lvl || 0;
+      }
+    }
+    const sideOf = h => rp.heroes.find(x => x.h === h)?.r ? 'radiant' : 'dire';
+    const teamKills = { radiant: 0, dire: 0 };
+    const kills = [...(rp.kills || [])].sort((a, b) => a[0] - b[0]);
+    kills.forEach(([, k, v]) => { teamKills[sideOf(k)]++; const a = pidOf(k), b = pidOf(v); if (a) getP(a).k++; if (b) getP(b).d++; });
+    if (kills.length) { const a = pidOf(kills[0][1]), b = pidOf(kills[0][2]); if (a) getP(a).fb++; if (b) getP(b).fbDeath++; }
+    const tf = teamfights(rp);
+    for (const side of ['radiant', 'dire']) for (const s of m[side] || []) {
+      const st = getP(s.pid);
+      if (s.kda && teamKills[side]) { st.kp += Math.min(1, (s.kda[0] + s.kda[2]) / teamKills[side]); st.kpN++; }
+      st.fights += tf.length; st.fightsW += tf.filter(f => f.winner === side).length;
+    }
+    if (rp.gold?.length && m.winner) {
+      const sign = m.winner === 'radiant' ? 1 : -1; const worst = Math.min(...rp.gold.map(g => g * sign));
+      if (worst <= -COMEBACK_GOLD) for (const s of m[m.winner] || []) { const st = getP(s.pid); st.cb++; st.cbMax = Math.max(st.cbMax, -worst); }
+    }
+  }
+  return { players: ps, games };
+}
+
+// ============ 团战检测 ============
+/* 相邻两次击杀间隔 ≤ FIGHT_GAP 秒视为同一场团战，累计 ≥ FIGHT_MIN 次击杀才算团战（零星单杀不算）。
+   赢家 = 击杀多的一方，相同算平；经济变化 = 团战结束那分钟与开始前一分钟的经济差之差（天辉视角） */
+const FIGHT_GAP = 20, FIGHT_MIN = 3;
+function teamfights(rp) {
+  const byHero = new Map((rp.heroes || []).map(h => [h.h, h]));
+  const sideOf = h => byHero.get(h)?.r ? 'radiant' : 'dire';
+  const kills = [...(rp.kills || [])].sort((a, b) => a[0] - b[0]);
+  const groups = []; let cur = null;
+  for (const k of kills) {
+    if (cur && k[0] - cur.end <= FIGHT_GAP) { cur.kills.push(k); cur.end = k[0]; }
+    else { cur = { start: k[0], end: k[0], kills: [k] }; groups.push(cur); }
+  }
+  return groups.filter(g => g.kills.length >= FIGHT_MIN).map(g => {
+    const n = { radiant: 0, dire: 0 }; g.kills.forEach(k => n[sideOf(k[1])]++);
+    const last = (rp.gold?.length || 1) - 1;
+    const m0 = Math.max(0, Math.floor(g.start / 60) - 1), m1 = Math.min(last, Math.ceil(g.end / 60));
+    const swing = rp.gold?.length ? (rp.gold[m1] ?? 0) - (rp.gold[m0] ?? 0) : null;
+    return { start: g.start, end: g.end, kills: g.kills, radiant: n.radiant, dire: n.dire, winner: n.radiant > n.dire ? 'radiant' : n.dire > n.radiant ? 'dire' : null, swing };
+  });
+}
+// 团战条带图：横轴是比赛时间，色块 = 团战（高度 ∝ 击杀数，颜色 = 赢家），小圆点 = 零星单杀
+function fightStripSvg(rp, fights, duration, sideOf) {
+  const W = 640, H = 64, L = 46, R = 10;
+  const lastKill = rp.kills.length ? Math.max(...rp.kills.map(k => k[0])) : 0;
+  const total = Math.max(duration ? duration * 60 : 0, lastKill + 60, 600);
+  const x = t => L + (W - L - R) * t / total;
+  const step = total > 3600 ? 10 : 5;
+  const ticks = []; for (let mi = 0; mi * 60 <= total; mi += step) ticks.push(`<line class="grid" x1="${x(mi * 60)}" y1="6" x2="${x(mi * 60)}" y2="${H - 18}"/><text class="tick" x="${x(mi * 60)}" y="${H - 5}" text-anchor="middle">${mi}'</text>`);
+  const inFight = new Set(fights.flatMap(f => f.kills));
+  const dots = rp.kills.filter(k => !inFight.has(k)).map(k => `<circle class="k ${sideOf(k[1])}" cx="${x(k[0])}" cy="${H / 2 - 6}" r="2.5"><title>${fmtClock(k[0])} 单杀</title></circle>`);
+  const maxN = Math.max(...fights.map(f => f.kills.length), 1);
+  const rects = fights.map((f, i) => { const h = 12 + 24 * f.kills.length / maxN; const w = Math.max(6, x(f.end) - x(f.start)); return `<rect class="f ${f.winner || 'even'}" x="${x(f.start) - 2}" y="${H / 2 - 6 - h / 2}" width="${w + 4}" height="${h}" rx="3"><title>团战 ${i + 1} · ${fmtClock(f.start)}–${fmtClock(f.end)}
+天辉 ${f.radiant} : ${f.dire} 夜魇${f.swing != null ? `
+经济差变化 ${f.swing > 0 ? '+' : ''}${f.swing}` : ''}</title></rect>`; });
+  return `<svg class="fight-strip" viewBox="0 0 ${W} ${H}">${ticks.join('')}${dots.join('')}${rects.join('')}</svg>`;
+}
+
+// ============ 称号（成就徽章） ============
+/* 每个称号只给当前最强的人（并列都给），样本不够就空缺。录像类（一血 / 翻盘 / 对线 / 团战）只看已解析的比赛，解析率低时会偏向被解析过的场 */
 function computeBadges(st, matches) {
   const P = playerMap();
   const players = Object.values(st.players).filter(s => P.has(s.pid));
@@ -224,21 +312,17 @@ function computeBadges(st, matches) {
   top(s => Object.keys(s.heroes).length, 8, { icon: '🧩', name: '英雄池最广' }, v => `用过 ${v} 个英雄`);
   const duos = Object.values(st.duos).filter(d => d.g >= 5 && P.has(d.a) && P.has(d.b)).sort((a, b) => b.w / b.g - a.w / a.g || b.g - a.g);
   if (duos.length && duos[0].w / duos[0].g > 0.5) { const d = duos[0]; [d.a, d.b].forEach(pid => give(pid, { icon: '🤝', name: '黄金搭档', detail: `和 ${pname(P, pid === d.a ? d.b : d.a)} 同队 ${d.w} 胜 ${d.g - d.w} 负` })); }
-  // 录像类：一血（第一次英雄击杀的凶手）、翻盘（赢的一方曾落后 ≥ COMEBACK_GOLD 经济）
-  const fb = {}, cb = {}, cbMax = {};
-  for (const m of matches) {
-    const rp = m.replay; if (!rp || !rp.heroes) continue;
-    const resolve = h => { const info = rp.heroes.find(x => x.h === h); if (!info) return null; const side = m[info.r ? 'radiant' : 'dire'] || []; const p = (info.acc && side.find(s => P.get(s.pid)?.accountId === info.acc)) || side.find(s => s.hero === (HERO_BY_ID[h] || '')); return p?.pid || null; };
-    const first = (rp.kills || []).map(k => resolve(k[1])).find(Boolean);
-    if (first) fb[first] = (fb[first] || 0) + 1;
-    if (rp.gold?.length && m.winner) {
-      const sign = m.winner === 'radiant' ? 1 : -1; const worst = Math.min(...rp.gold.map(g => g * sign));
-      if (worst <= -COMEBACK_GOLD) for (const s of m[m.winner] || []) { cb[s.pid] = (cb[s.pid] || 0) + 1; cbMax[s.pid] = Math.max(cbMax[s.pid] || 0, -worst); }
-    }
-  }
-  const byCount = (obj, min, badge, fmt) => { const es = Object.entries(obj).filter(([pid, n]) => n >= min && P.has(pid)); if (!es.length) return; const mx = Math.max(...es.map(e => e[1])); es.filter(e => e[1] === mx).forEach(([pid, n]) => give(pid, { ...badge, detail: fmt(n, pid) })); };
-  byCount(fb, 2, { icon: '🩸', name: '一血机器' }, n => `${n} 次一血（只算已解析的比赛）`);
-  byCount(cb, 1, { icon: '🔄', name: '翻盘王' }, (n, pid) => `${n} 次落后 ${COMEBACK_GOLD}+ 经济翻盘，最多落后 ${cbMax[pid]}（只算已解析的比赛）`);
+  // 录像类：一血 / 翻盘 / 对线 / 团战参与，全部来自已解析比赛的聚合
+  const rs = Object.values(replayStats(matches).players).filter(s => P.has(s.pid));
+  const topR = (val, min, badge, fmt) => {
+    const list = rs.map(s => ({ s, v: val(s) })).filter(x => x.v != null && x.v >= min); if (!list.length) return;
+    const mx = Math.max(...list.map(x => x.v));
+    list.filter(x => x.v === mx).forEach(x => give(x.s.pid, { ...badge, detail: fmt(x.v, x.s) }));
+  };
+  topR(s => s.fb || null, 2, { icon: '🩸', name: '一血机器' }, n => `${n} 次一血（只算已解析的比赛）`);
+  topR(s => s.cb || null, 1, { icon: '🔄', name: '翻盘王' }, (n, s) => `${n} 次落后 ${COMEBACK_GOLD}+ 经济翻盘，最多落后 ${s.cbMax}（只算已解析的比赛）`);
+  topR(s => s.laneG >= 3 ? s.laneW / s.laneG : null, 0.5, { icon: '⚔️', name: '对线霸主' }, (v, s) => `对线 ${s.laneW} 胜 ${s.laneL} 负 ${s.laneG - s.laneW - s.laneL} 平（10 分钟本路经济领先 ≥ ${LANE_EDGE}，只算已解析的比赛）`);
+  topR(s => s.kpN >= 3 ? s.kp / s.kpN : null, 0.6, { icon: '🤜', name: '团战核心' }, (v, s) => `击杀参与率 ${(v * 100).toFixed(0)}%（${s.kpN} 场，只算已解析的比赛）`);
   return out;
 }
 const badgesHtml = (list, full = false) => (list || []).map(b => full ? `<span class="badge full" title="${esc(b.detail)}">${b.icon} ${esc(b.name)} <span class="hint">${esc(b.detail)}</span></span>` : `<span class="badge" title="${esc(b.name)}：${esc(b.detail)}">${b.icon}</span>`).join('');
@@ -895,6 +979,10 @@ function showReplayModal(m) {
     ${rp.lanes.length ? `<h4>对线期（约 10 分钟）</h4><div class="table-wrap"><table class="tbl"><thead><tr><th>阵营</th><th>选手</th><th>英雄</th><th class="num">等级</th><th class="num">正/反补</th><th class="num">净资产</th><th class="num">K/D/A</th></tr></thead><tbody>${rp.lanes.map(l => `<tr><td colspan="7" class="hint" style="background:var(--panel2)">${laneName[l.type] || '分路 ' + l.type}</td></tr>${l.rad.map(h => laneRow(h)).join('')}${l.dire.map(h => laneRow(h)).join('')}`).join('')}</tbody></table></div>` : ''}
     ${rp.res.radiant ? `<h4>资源投入</h4><div class="table-wrap"><table class="tbl"><thead><tr><th>阵营</th><th class="num">假眼</th><th class="num">真眼</th><th class="num">堆野</th><th class="num">经验符</th><th class="num">技能符</th><th class="num">雾</th><th class="num">粉</th><th class="num">宝石</th></tr></thead><tbody>${resRow('radiant', '天辉')}${resRow('dire', '夜魇')}</tbody></table></div>` : ''}
     ${rp.bp.length ? `<h4>BP 顺序</h4><div class="rp-bp">${rp.bp.map(([h, pick, team], i) => `<span class="rp-bp-item ${team === 0 ? 'radiant' : 'dire'} ${pick ? '' : 'ban'}" title="第 ${i + 1} 手 · ${team === 0 ? '天辉' : '夜魇'}${pick ? '选' : '禁'}">${i + 1}. ${esc(heroName(h))}${pick ? '' : ' ✕'}</span>`).join('')}</div>` : ''}
+    ${(() => { const fights = teamfights(rp); const won = { radiant: 0, dire: 0 }; fights.forEach(f => { if (f.winner) won[f.winner]++; });
+      return `<h4>团战 <span class="hint" style="text-transform:none">${fights.length ? `${fights.length} 次（${FIGHT_GAP} 秒内连续 ≥ ${FIGHT_MIN} 杀算一次团战）· 天辉赢 ${won.radiant} · 夜魇赢 ${won.dire}${fights.length - won.radiant - won.dire ? ` · 平 ${fights.length - won.radiant - won.dire}` : ''}` : '没有连续 3 杀以上的交战'}</span></h4>
+      ${fightStripSvg(rp, fights, m.duration, sideOf)}
+      ${fights.length ? `<div class="table-wrap" style="max-height:220px;overflow:auto"><table class="tbl"><thead><tr><th>#</th><th>时间</th><th class="num">天辉 : 夜魇</th><th>结果</th><th class="num">经济变化</th><th>阵亡</th></tr></thead><tbody>${fights.map((f, i) => `<tr><td class="num">${i + 1}</td><td class="num">${fmtClock(f.start)}–${fmtClock(f.end)}</td><td class="num"><b>${f.radiant} : ${f.dire}</b></td><td>${f.winner ? `<span class="side ${f.winner}">${f.winner === 'radiant' ? '天辉赢' : '夜魇赢'}</span>` : '<span class="hint">平</span>'}</td><td class="num">${f.swing == null ? '-' : `<span class="${f.swing > 0 ? 'win' : f.swing < 0 ? 'loss' : ''}">${f.swing > 0 ? '+' : ''}${f.swing}</span>`}</td><td class="wrap">${f.kills.map(k => `<span class="side ${sideOf(k[2])}">${esc(who(k[2]))}</span>`).join(' ')}</td></tr>`).join('')}</tbody></table></div>` : ''}`; })()}
     <h4>击杀时间线 <span class="hint" style="text-transform:none">${rp.kills.length} 次英雄击杀</span></h4>
     <div class="table-wrap" style="max-height:260px;overflow:auto"><table class="tbl"><tbody>${rp.kills.map(([t, k, v]) => `<tr><td class="num" style="width:60px">${fmtClock(t)}</td><td><span class="side ${sideOf(k)}">${esc(who(k))}</span> <span class="hint">${esc(heroName(k))}</span></td><td class="hint">击杀</td><td><span class="side ${sideOf(v)}">${esc(who(v))}</span> <span class="hint">${esc(heroName(v))}</span></td></tr>`).join('') || '<tr><td class="hint">无</td></tr>'}</tbody></table></div>`);
   $('#rp-refresh').onclick = () => loadReplay(m, null);
@@ -977,6 +1065,7 @@ let lastStatsRows = [];
   $('#duo-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#duo-worst-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#hero-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
+  $('#lane-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#btn-copy-md').addEventListener('click', async () => {
     const head = ['选手', '段位', '评分', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
     const md = ['| ' + head.join(' | ') + ' |', '|' + head.map(() => '---').join('|') + '|', ...lastStatsRows.map(r => '| ' + r.join(' | ') + ' |')].join('\n');
@@ -1080,6 +1169,23 @@ function renderStats() {
     <td><strong>${esc(h.hero)}</strong></td><td class="num">${h.g}</td><td class="num">${h.w}</td><td class="num">${pct(h.w, h.g)}</td>
     <td class="wrap">${Object.entries(h.users).sort((a, b) => b[1] - a[1]).map(([pid, n]) => `<button class="link" data-pid="${pid}">${esc(pname(P, pid))}</button><span class="hint">×${n}</span>`).join('　')}</td>
   </tr>`).join('') : `<tr><td colspan="5" class="empty">比赛里填了英雄才会有统计</td></tr>`;
+
+  // 对线与节奏（只看已解析的比赛）
+  const rsAll = replayStats(ms);
+  const laneRows = Object.values(rsAll.players).filter(s => P.has(s.pid) && s.g >= minG).sort((a, b) => pctNum(b.laneW, b.laneG) - pctNum(a.laneW, a.laneG) || b.laneG - a.laneG || b.g - a.g);
+  $('#lane-count').textContent = rsAll.games ? `已解析 ${rsAll.games} / ${ms.length} 场` : '';
+  $('#lane-table tbody').innerHTML = laneRows.length ? laneRows.map(s => `<tr>
+    <td><button class="name-btn" data-pid="${s.pid}">${esc(pname(P, s.pid))}</button></td>
+    <td class="num">${s.g}</td>
+    <td class="num">${s.laneG ? `<strong>${pct(s.laneW, s.laneG)}</strong> <span class="hint">${s.laneW}/${s.laneL}/${s.laneG - s.laneW - s.laneL}</span>` : '-'}</td>
+    <td class="num">${s.laneG ? `${s.laneGold > 0 ? '+' : ''}${Math.round(s.laneGold / s.laneG)}` : '-'}</td>
+    <td class="num">${s.laneG ? `${(s.lh / s.laneG).toFixed(1)} <span class="hint">/ ${(s.dn / s.laneG).toFixed(1)}</span>` : '-'}</td>
+    <td class="num">${s.laneG ? Math.round(s.nw / s.laneG) : '-'}</td>
+    <td class="num">${s.kpN ? `<strong>${(s.kp / s.kpN * 100).toFixed(0)}%</strong>` : '-'}</td>
+    <td class="num">${s.fights ? `${pct(s.fightsW, s.fights)} <span class="hint">(${s.fights})</span>` : '-'}</td>
+    <td class="num">${s.fb}${s.fbDeath ? ` <span class="hint loss">送 ${s.fbDeath}</span>` : ''}</td>
+    <td class="num">${s.cb || '-'}</td>
+  </tr>`).join('') : `<tr><td colspan="10" class="empty">还没有已解析的比赛，去「比赛」页点「批量解析」或单场「详情解析」</td></tr>`;
 
   // 双人组合（最佳 / 最差）
   const allDuos = Object.values(st.duos).filter(d => d.g >= 2 && P.has(d.a) && P.has(d.b));
@@ -1187,6 +1293,16 @@ function showPlayerDetail(pid) {
   const stAll = computeStats(scopeMatches), st = stAll.players[pid];
   if (!st) return showModal(`<h2>${esc(p.name)} ${rankBadge(p)}</h2><p class="empty">还没有比赛记录</p>`);
   const myBadges = computeBadges(stAll, scopeMatches)[pid] || [];
+  const rs = replayStats(scopeMatches).players[pid];
+  const replayTiles = rs && rs.g ? `<h4>录像解析 <span class="hint" style="text-transform:none">只看已解析的 ${rs.g} 场</span></h4><div class="overview">
+      ${rs.laneG ? `<div class="stat-tile" title="对线期（约 10 分钟）本路双方净资产之和相比，领先 ≥ ${LANE_EDGE} 算赢、落后 ≥ ${LANE_EDGE} 算输"><div class="k">对线胜率</div><div class="v">${pct(rs.laneW, rs.laneG)}</div><div class="s">${rs.laneW} 胜 ${rs.laneL} 负 ${rs.laneG - rs.laneW - rs.laneL} 平 · 平均领先 ${rs.laneGold > 0 ? '+' : ''}${Math.round(rs.laneGold / rs.laneG)}</div></div>
+      <div class="stat-tile"><div class="k">10 分钟补刀</div><div class="v">${(rs.lh / rs.laneG).toFixed(1)}</div><div class="s">反补 ${(rs.dn / rs.laneG).toFixed(1)} · ${(rs.lvl / rs.laneG).toFixed(1)} 级</div></div>
+      <div class="stat-tile"><div class="k">10 分钟净资产</div><div class="v">${Math.round(rs.nw / rs.laneG)}</div><div class="s">对线期结束时</div></div>` : ''}
+      ${rs.kpN ? `<div class="stat-tile" title="(击杀 + 助攻) ÷ 本方总击杀"><div class="k">击杀参与率</div><div class="v">${(rs.kp / rs.kpN * 100).toFixed(0)}%</div><div class="s">${rs.kpN} 场</div></div>` : ''}
+      ${rs.fights ? `<div class="stat-tile" title="自己这边赢下的团战 ÷ 全部团战（${FIGHT_GAP} 秒内连续 ≥ ${FIGHT_MIN} 杀算一次）"><div class="k">团战胜率</div><div class="v">${pct(rs.fightsW, rs.fights)}</div><div class="s">${rs.fightsW}/${rs.fights} 次</div></div>` : ''}
+      <div class="stat-tile"><div class="k">一血</div><div class="v">${rs.fb}</div><div class="s">拿一血 ${rs.fb} 次 · 送一血 ${rs.fbDeath} 次</div></div>
+      ${rs.cb ? `<div class="stat-tile"><div class="k">翻盘</div><div class="v">${rs.cb}</div><div class="s">最多落后 ${rs.cbMax} 经济</div></div>` : ''}
+    </div>` : '';
   const tbl = (head, rows, empty) => rows.length
     ? `<div class="table-wrap"><table class="tbl"><thead><tr>${head.map(h => `<th${h.startsWith('#') ? ' class="num"' : ''}>${h.replace('#', '')}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td${head[i].startsWith('#') ? ' class="num"' : ''}>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
     : `<p class="hint">${empty}</p>`;
@@ -1213,6 +1329,7 @@ function showPlayerDetail(pid) {
       <div><h4>队友（同队时的胜率）</h4>${tbl(['队友', '#同队', '#胜', '#胜率'], mates, '-')}</div>
       <div><h4>对手（对阵时的胜率）</h4>${tbl(['对手', '#对阵', '#胜', '#胜率'], opps, '-')}</div>
     </div>
+    ${replayTiles}
     ${st.eloHist.length >= 2 ? `<h4>Elo 走势 <span class="hint" style="text-transform:none">横轴是自己的第几场，悬停看那场的结果</span></h4><div id="pd-chart">${lineChartSvg('pd-elo', [{ v: st.eloHist.map(h => h.elo), color: '#e0a83a' }], { height: 160, yFmt: v => String(Math.round(v)) })}</div><div id="pd-tip" class="rp-tip hidden"></div>` : ''}
     <h4>最近比赛 <span class="hint" style="text-transform:none">点比赛 ID 展开详情</span></h4>${tbl(['日期', '比赛 ID', '阵营', '位置', '英雄', 'K/D/A', '结果'], recent, '-')}
   `);
@@ -2227,7 +2344,7 @@ window.addEventListener('beforeunload', e => { if (cloudOn() && (cloud.timer || 
 // ============ 对扩展模块暴露的接口 ============
 window.DotaApp = {
   get state() { return state; }, get ui() { return ui; },
-  save, hooks, renderAll, switchTab, prefillMatch, startEditMatch, computeStats,
+  save, hooks, renderAll, switchTab, prefillMatch, startEditMatch, computeStats, computeBadges, badgesHtml, replayStats,
   $, $$, esc, uid, today, toast, showModal, hideModal, playerMap, pname, rankBadge, rankIdx, RANKS, POS_SHORT, POS_NAME, HERO_BY_ID, HEROES,
   playerScore, loadScoreOpt, saveScoreOpt, SCORE_DEF,
 };
