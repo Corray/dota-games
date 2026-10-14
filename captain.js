@@ -18,6 +18,15 @@ const EMPTY = () => ({ tmId: '', prices: {}, must: [], avoid: [], reserve: 0, pr
 const TIER_SCORE = { 'SSS': 100, 'S': 88, 'A+': 78, 'A': 70, 'A-': 62, 'B': 54, 'C': 44, 'D': 34 };
 const STRENGTH_MODES = { mix: '内战评分 + 定级各半', score: '只看内战评分', tier: '只看定级档位' };
 const strengthOf = (score, g, mode) => { const ts = TIER_SCORE[g]; if (ts == null) return score; return mode === 'score' ? score : mode === 'tier' ? ts : (score + ts) / 2; };
+/* 搭档配合分：两人同队过的胜率偏离 50% 多少，乘样本置信（g ÷ (g + SYN_TRUST)），再乘 SYN_SCALE。
+   同队 5 场全胜 → +6.25，5 场全败 → −6.25；没同队过 = 0。阵容里 10 对两两相加，和实力分同一量纲 */
+const SYN_SCALE = 20, SYN_TRUST = 3, SYN_MIN_G = 2;
+function synergyMap(duos) {
+  const m = new Map();
+  for (const d of Object.values(duos || {})) { if (d.g < SYN_MIN_G) continue; const v = (d.w / d.g - 0.5) * (d.g / (d.g + SYN_TRUST)) * SYN_SCALE; if (v) m.set(d.a + '|' + d.b, { v, g: d.g, w: d.w }); }
+  return m;
+}
+const synOf = (map, a, b) => map.get(a < b ? a + '|' + b : b + '|' + a) || null;
 function loadPlan(t) {
   try { const d = JSON.parse(localStorage.getItem(KEY(t.id)) || 'null'); if (d) return { ...EMPTY(), ...d, prices: d.prices || {}, must: d.must || [], avoid: d.avoid || [], reserve: Number(d.reserve) || 0 }; } catch (e) { /* 本地存储不可用就当没存过 */ }
   return EMPTY();
@@ -31,20 +40,22 @@ const roundIdx = (t, c) => { const r = c.round; if (!r) return 99; return auc(t)
 
 // 候选：参赛名单里还没成交的人。身价：队长填的优先，否则按档位的预估价；没档位又没填价的人进不了方案
 function buildCands(t, plan) {
-  const stats = A.computeStats(S().matches).players, so = A.loadScoreOpt();
-  return TN.rosterPlayers(t).filter(p => !dealOf(t, p.id)).map(p => {
+  const all = A.computeStats(S().matches), stats = all.players, so = A.loadScoreOpt();
+  const list = TN.rosterPlayers(t).filter(p => !dealOf(t, p.id)).map(p => {
     const g = gradeOf(t, p.id);
     const mine = Number(plan.prices[p.id]);
     const price = mine > 0 ? mine : (TIER[g] ? (TIER[g][plan.priceMode] ?? TIER[g].fair) : 0);
     const sc = A.playerScore(stats[p.id], p, so);
     return { pid: p.id, p, g, cls: TIER[g]?.cls || '', grp: posGroup(p), price, mine: mine > 0, score: strengthOf(sc.score, g, plan.strength), rawScore: sc.score, games: stats[p.id]?.g || 0, must: plan.must.includes(p.id), avoid: plan.avoid.includes(p.id), round: lotRound(t, p.id) };
   });
+  list.syn = plan.synergy === false ? new Map() : synergyMap(all.duos);   // 搭档表挂在候选数组上，求解和展示共用
+  return list;
 }
 
 // ============ 求解 ============
 /* 精确搜索而不是贪心：先把已买的人排到号位上（所有合法排法都试），再为每个空号位挑人。
    每个号位只看该位有效分最高的 K 人 + 必抢的人，K=10 时最多 10^4 种组合，毫秒级。
-   目标：总评分最高，同分取便宜的；降位打的人（能打但不擅长）评分打九折。
+   目标：总评分 + 阵容内两两搭档配合分 最高，同分取便宜的；降位打的人（能打但不擅长）评分打九折。
    约束：预算 − 自留、S 级 ≤2、A 系 ≤3、45 组 ≤2（45 组只能占 4/5）、必抢全在、不要的不进 */
 const K = 10;
 function solve(t, tmId, cands, plan, excludePid) {
@@ -59,6 +70,10 @@ function solve(t, tmId, cands, plan, excludePid) {
   const canPlay = (c, pos) => c.grp === '45' ? pos >= 4 : true;
   const good = (c, pos) => (c.p.positions || []).includes(pos);
   const eff = (c, pos) => good(c, pos) ? c.score : c.score * 0.9;
+  const syn = cands.syn || new Map();
+  const synWith = (pid, others) => { let s = 0; for (const o of others) { const d = synOf(syn, pid, o); if (d) s += d.v; } return s; };
+  // 剪枝用的配合分上界：任何一个人最多还能从剩余名额里拿到的正配合分
+  const synUpper = Math.max(0, ...pool.map(c => [...syn.entries()].filter(([k, d]) => d.v > 0 && k.split('|').includes(c.pid)).map(([, d]) => d.v).sort((a, b) => b - a).slice(0, SIZE - 1).reduce((s, v) => s + v, 0)));
   const fixedAssigns = [];
   (function dfs(i, used, acc) {
     if (i === fixed.length) { fixedAssigns.push([...acc]); return; }
@@ -74,15 +89,16 @@ function solve(t, tmId, cands, plan, excludePid) {
     const upper = order.map(i => lists[i].length ? Math.max(...lists[i].map(c => eff(c, open[i]))) : 0);
     const rem = []; for (let k = order.length - 1, s = 0; k >= 0; k--) { s += upper[k]; rem[k] = s; }
     const pick = new Array(open.length).fill(null); const taken = new Set();
-    let cost = 0, uS = st.sCnt, uA = st.aCnt, u45 = st.c45, total = 0;
+    let cost = 0, uS = st.sCnt, uA = st.aCnt, u45 = st.c45, total = 0, synTotal = 0;
     const dfs = k => {
       if (k === order.length) {
         if (mustIds.some(id => !taken.has(id))) return;
-        if (!best || total > best.total + 1e-9 || (Math.abs(total - best.total) < 1e-9 && cost < best.cost))
-          best = { pick: pick.map((c, i) => ({ ...c, pos: open[i], down: !good(c, open[i]) })), cost, total, fixedPos: fixed.map((pid, i) => ({ pid, pos: asg[i] })) };
+        const sum = total + synTotal;
+        if (!best || sum > best.total + 1e-9 || (Math.abs(sum - best.total) < 1e-9 && cost < best.cost))
+          best = { pick: pick.map((c, i) => ({ ...c, pos: open[i], down: !good(c, open[i]) })), cost, total: sum, strength: total, syn: synTotal, fixedPos: fixed.map((pid, i) => ({ pid, pos: asg[i] })) };
         return;
       }
-      if (best && total + rem[k] < best.total - 1e-9) return;
+      if (best && total + synTotal + rem[k] + (order.length - k) * synUpper < best.total - 1e-9) return;
       const i = order[k], pos = open[i];
       for (const c of lists[i]) {
         if (taken.has(c.pid)) continue;
@@ -90,11 +106,12 @@ function solve(t, tmId, cands, plan, excludePid) {
         if (c.cls === 'A' && uA >= QUOTA.A) continue;
         if (c.grp === '45' && u45 >= MAX45) continue;
         if (cost + c.price > cap + 1e-9) continue;
-        pick[i] = c; taken.add(c.pid); cost += c.price; total += eff(c, pos);
+        const sAdd = synWith(c.pid, [...fixed, ...taken]);
+        pick[i] = c; taken.add(c.pid); cost += c.price; total += eff(c, pos); synTotal += sAdd;
         if (c.cls === 'S') uS++; else if (c.cls === 'A') uA++;
         if (c.grp === '45') u45++;
         dfs(k + 1);
-        pick[i] = null; taken.delete(c.pid); cost -= c.price; total -= eff(c, pos);
+        pick[i] = null; taken.delete(c.pid); cost -= c.price; total -= eff(c, pos); synTotal -= sAdd;
         if (c.cls === 'S') uS--; else if (c.cls === 'A') uA--;
         if (c.grp === '45') u45--;
       }
@@ -115,6 +132,9 @@ function makePlan(t, tmId, cands, plan) {
   const main = solve(t, tmId, cands, plan, null);
   if (!main.ok) return main;
   const ppp = main.total > 0 ? main.cost / main.total : 0;
+  const syn = cands.syn || new Map(), P = playerMap();
+  const members = [...main.fixedPos.map(f => f.pid), ...main.pick.map(x => x.pid)];
+  const synDetail = pid => members.filter(o => o !== pid).map(o => { const d = synOf(syn, pid, o); return d ? { pid: o, name: pname(P, o), ...d } : null; }).filter(Boolean);
   const targets = main.pick.map(x => {
     const alt = x.must ? { ok: false } : solve(t, tmId, cands, plan, x.pid);
     const budgetCeil = main.cap - (main.cost - x.price);
@@ -125,7 +145,8 @@ function makePlan(t, tmId, cands, plan) {
     }
     const raw = Math.max(x.price, Math.min(budgetCeil, valueCeil));
     const ceil = Math.max(snap(raw, x.g), x.price);
-    return { ...x, budgetCeil, valueCeil, ceil, alt: altDiff, noAlt: !x.must && !alt.ok, overMax: !!TIER[x.g] && ceil > TIER[x.g].max };
+    const sd = synDetail(x.pid);
+    return { ...x, budgetCeil, valueCeil, ceil, alt: altDiff, noAlt: !x.must && !alt.ok, overMax: !!TIER[x.g] && ceil > TIER[x.g].max, synDetail: sd, synSum: sd.reduce((s, d) => s + d.v, 0) };
   }).sort((a, b) => roundIdx(t, a) - roundIdx(t, b) || a.pos - b.pos);
   return { ...main, targets };
 }
@@ -159,6 +180,7 @@ function open(t, tmId) {
         <label class="grow" title="没填身价的人按档位的这个价估">没填身价时按<select id="cp-mode">${Object.entries(PRICE_MODES).map(([k, v]) => `<option value="${k}" ${k === plan.priceMode ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
         <label class="grow" title="方案按什么衡量一个人的强弱">实力口径<select id="cp-strength">${Object.entries(STRENGTH_MODES).map(([k, v]) => `<option value="${k}" ${k === plan.strength ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
         <label class="narrow" title="方案里不动用的钱，留给后面的轮次加价或应急">自留(万)<input type="number" id="cp-reserve" min="0" step="1" value="${plan.reserve || 0}"></label>
+        <label class="inline" title="阵容里每对人同队过的胜率偏离五成多少，乘样本置信，计入总分；同队 5 场全胜一对 +6，全败 −6"><input type="checkbox" id="cp-syn" ${plan.synergy === false ? '' : 'checked'}> 算上搭档胜率</label>
         <button type="button" id="cp-paste" title="一行一个「昵称 身价」，批量填">粘贴身价</button>
         <button type="button" id="cp-copy" title="把方案复制成文字，拍卖时看手机">复制方案</button>
         <button type="button" class="ghost" id="cp-clear" title="清掉本机存的身价和标记">清空</button>
@@ -177,6 +199,7 @@ function open(t, tmId) {
     $('#cp-team').onchange = e => { cui.tmId = e.target.value; plan.tmId = cui.tmId; savePlan(t, plan); render(); };
     $('#cp-mode').onchange = e => { plan.priceMode = e.target.value; savePlan(t, plan); render(); };
     $('#cp-strength').onchange = e => { plan.strength = e.target.value; savePlan(t, plan); render(); };
+    $('#cp-syn').onchange = e => { plan.synergy = e.target.checked; savePlan(t, plan); renderRight(); };
     $('#cp-reserve').oninput = e => { plan.reserve = Math.max(0, Number(e.target.value) || 0); savePlan(t, plan); renderRight(); };
     $('#cp-clear').onclick = () => { if (!confirm('清掉本机存的身价、必抢、不要和自留？')) return; const keep = plan.tmId; Object.assign(plan, EMPTY(), { tmId: keep }); savePlan(t, plan); render(); };
     $('#cp-paste').onclick = () => openPaste(t, plan, render);
@@ -213,12 +236,14 @@ function open(t, tmId) {
     const box = $('#cp-right');
     if (!r.ok) { box.innerHTML = `<div class="au-plan"><div class="au-plan-h"><b>最优阵容</b></div><p class="empty">${esc(r.msg)}</p></div>`; return; }
     const P2 = playerMap();
-    const fixedRows = r.fixedPos.map(f => `<tr class="cp-fixed"><td><b class="au-pos">${f.pos}</b></td><td>${esc(pname(P2, f.pid))}<span class="hint"> 已在队</span></td><td></td><td class="num hint">${fmt(st.deals.find(d => d.pid === f.pid)?.price || 0)}</td><td></td><td></td></tr>`).join('');
+    const synCell = x => { if (!x.synDetail.length) return '<span class="hint">-</span>'; const tip = x.synDetail.map(d => `和 ${d.name} 同队 ${d.w} 胜 ${d.g - d.w} 负 → ${d.v > 0 ? '+' : ''}${d.v.toFixed(1)}`).join('\n'); return `<span class="${x.synSum > 0 ? 'win' : x.synSum < 0 ? 'loss' : ''}" title="${esc(tip)}">${x.synSum > 0 ? '+' : ''}${x.synSum.toFixed(1)}</span>`; };
+    const fixedRows = r.fixedPos.map(f => `<tr class="cp-fixed"><td><b class="au-pos">${f.pos}</b></td><td>${esc(pname(P2, f.pid))}<span class="hint"> 已在队</span></td><td></td><td></td><td class="num hint">${fmt(st.deals.find(d => d.pid === f.pid)?.price || 0)}</td><td></td><td></td></tr>`).join('');
     const altText = x => x.must ? '<span class="hint">必抢，不设备选</span>' : x.noAlt ? '<span class="loss">没他就凑不齐</span>' : x.alt.in.length ? `${x.alt.in.map(y => `<b>${esc(y.p.name)}</b><span class="hint">${fmt(y.price)}</span>`).join('、')}${x.alt.out.length ? `<span class="hint">（换下 ${x.alt.out.map(y => esc(y.p.name)).join('、')}）</span>` : ''}` : '-';
     const targetRows = [...r.targets].sort((a, b) => a.pos - b.pos).map(x => `<tr>
       <td><b class="au-pos">${x.pos}</b>${x.down ? '<i class="hint" title="不擅长这个位，降位打">↓</i>' : ''}</td>
       <td><b>${esc(x.p.name)}</b>${x.must ? '<span class="pc">必抢</span>' : ''}<span class="hint"> ${esc(x.g || '')}</span></td>
       <td class="num">${x.score.toFixed(1)}</td>
+      <td class="num">${synCell(x)}</td>
       <td class="num">${fmt(x.price)}${x.mine ? '' : '<span class="hint" title="没填身价，按档位估">*</span>'}</td>
       <td class="num"><b class="${x.overMax ? 'loss' : 'win'}">${fmt(x.ceil)}</b></td>
       <td class="wrap">${altText(x)}</td></tr>`).join('');
@@ -232,8 +257,8 @@ function open(t, tmId) {
     if (r.targets.some(x => x.overMax)) warns.push('红色止损价超过了档位上限，规则七.2 要主持人确认预算余量才能继续加');
     warns.push('止损价是逐个算的：某一个顶到止损买，其他人还按身价买才不超预算；连续多个都顶格就得重算');
     box.innerHTML = `<div class="au-plan">
-        <div class="au-plan-h"><b>最优阵容</b><span class="hint">合计身价 <b>${fmt(r.cost)}</b> 万 · 余 ${fmt(r.cap - r.cost)}${plan.reserve ? ' + 自留 ' + fmt(plan.reserve) : ''} · 总分 <b>${r.total.toFixed(0)}</b></span></div>
-        <table class="tbl"><thead><tr><th>位</th><th>目标</th><th class="num">实力</th><th class="num">身价</th><th class="num" title="超过这个价就别跟了">止损</th><th>失手备选</th></tr></thead><tbody>${fixedRows}${targetRows}</tbody></table>
+        <div class="au-plan-h"><b>最优阵容</b><span class="hint">合计身价 <b>${fmt(r.cost)}</b> 万 · 余 ${fmt(r.cap - r.cost)}${plan.reserve ? ' + 自留 ' + fmt(plan.reserve) : ''} · 总分 <b>${r.total.toFixed(0)}</b>${r.syn ? `（实力 ${r.strength.toFixed(0)}，搭档 ${r.syn > 0 ? '+' : ''}${r.syn.toFixed(0)}）` : ''}</span></div>
+        <table class="tbl"><thead><tr><th>位</th><th>目标</th><th class="num">实力</th><th class="num" title="和阵容里其他人的同队胜率配合分之和，悬停看明细">配合</th><th class="num">身价</th><th class="num" title="超过这个价就别跟了">止损</th><th>失手备选</th></tr></thead><tbody>${fixedRows}${targetRows}</tbody></table>
       </div>
       <div class="au-plan" style="margin-top:10px">
         <div class="au-plan-h"><b>拍卖顺序</b><span class="hint">按轮次走，每人一条：身价 → 止损 → 失手备选</span></div>
@@ -274,9 +299,9 @@ function planText(t, plan) {
   const cands = buildCands(t, plan), r = makePlan(t, cui.tmId, cands, plan), st = teamStat(t, cui.tmId), tm = TN.teamOf(t, cui.tmId);
   const out = [`【${tm?.name || ''} 队长方案】剩 ${fmt(st.left)} 万 / ${st.slots} 名额${plan.reserve ? `，自留 ${fmt(plan.reserve)}` : ''}`];
   if (!r.ok) { out.push(r.msg); return out.join('\n'); }
-  out.push(`最优阵容：合计身价 ${fmt(r.cost)} 万，总分 ${r.total.toFixed(0)}`);
+  out.push(`最优阵容：合计身价 ${fmt(r.cost)} 万，总分 ${r.total.toFixed(0)}${r.syn ? `（实力 ${r.strength.toFixed(0)}，搭档 ${r.syn > 0 ? '+' : ''}${r.syn.toFixed(0)}）` : ''}`);
   for (const f of r.fixedPos) out.push(`  ${f.pos}号位 ${pname(playerMap(), f.pid)}（已在队）`);
-  for (const x of [...r.targets].sort((a, b) => a.pos - b.pos)) out.push(`  ${x.pos}号位 ${x.p.name}${x.g ? ' ' + x.g : ''}${x.down ? '（降位）' : ''}：身价 ${fmt(x.price)}，止损 ${fmt(x.ceil)}${x.must ? '，必抢' : x.noAlt ? '，无备选' : x.alt.in.length ? '，失手改抢 ' + x.alt.in.map(y => `${y.p.name} ${fmt(y.price)}`).join(' / ') : ''}`);
+  for (const x of [...r.targets].sort((a, b) => a.pos - b.pos)) out.push(`  ${x.pos}号位 ${x.p.name}${x.g ? ' ' + x.g : ''}${x.down ? '（降位）' : ''}：身价 ${fmt(x.price)}，止损 ${fmt(x.ceil)}${x.synDetail.length ? `，配合 ${x.synSum > 0 ? '+' : ''}${x.synSum.toFixed(1)}（${x.synDetail.map(d => `${d.name} ${d.w}/${d.g}`).join('、')}）` : ''}${x.must ? '，必抢' : x.noAlt ? '，无备选' : x.alt.in.length ? '，失手改抢 ' + x.alt.in.map(y => `${y.p.name} ${fmt(y.price)}`).join(' / ') : ''}`);
   out.push('拍卖顺序：');
   let running = st.left, cur = null;
   for (const x of r.targets) { const name = x.round ? x.round.name : '未编排轮次'; if (name !== cur) { cur = name; out.push(`${name}`); } running -= x.price; out.push(`  ${x.p.name}：最多出到 ${fmt(x.ceil)}（买完剩 ${fmt(running)}）`); }
