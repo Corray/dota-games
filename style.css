@@ -546,3 +546,20 @@ tr.ld-same td{color:var(--muted)}
 .award-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .award-list .award-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .award-list .award-row b{min-width:5em}
+/* 队长方案 */
+.cp-grid{display:grid;grid-template-columns:minmax(300px,1fr) minmax(340px,1.15fr);gap:14px;margin-top:6px}
+@media (max-width:860px){.cp-grid{grid-template-columns:1fr}}
+.cp-wrap{max-height:520px;overflow:auto}
+.cp-table{font-size:12px}
+.cp-table td,.cp-table th{padding:3px 5px;white-space:nowrap}
+.cp-table input.cp-price{width:4.6em;padding:2px 4px;font-size:12px;text-align:right}
+.cp-table input[type=checkbox]{margin:0}
+.cp-table tr.cp-must td:nth-child(2){color:var(--accent)}
+.cp-table tr.cp-avoid td{opacity:.45}
+.cp-table tr.cp-avoid td:nth-last-child(1),.cp-table tr.cp-avoid td:nth-last-child(2){opacity:1}
+tr.cp-fixed td{color:var(--muted)}
+.cp-round{margin:6px 0}
+.cp-round-h{font-weight:600;font-size:13px;margin-bottom:2px}
+.cp-round ul{margin:0 0 4px 0;padding-left:18px;font-size:12px}
+.cp-round li{margin:2px 0}
+.cp-warns{margin:10px 0 0;padding-left:18px;font-size:11px}

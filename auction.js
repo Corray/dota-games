@@ -401,6 +401,7 @@ function view(t) {
     ${editable ? `<button type="button" class="primary" id="au-import">导入定级表</button>
     <button type="button" id="au-mkteams" title="按规则一次性建满队伍并命名">生成队伍</button>
     <button type="button" id="au-rec">性价比阵容推荐</button>
+    <button type="button" id="au-cplan" title="队长视角：自填每个人的身价，算最优阵容、止损价和失手备选；只存本机">我是队长 · 方案</button>
     <button type="button" class="ghost danger" id="au-reset">清空成交</button>` : '<span class="hint">赛事已开始，拍卖账目锁定</span>'}
     <span class="hint">选手池 ${pool.length} 人（已定级 ${graded.length}）· 已成交 ${dealt} 人 · 总成交额 ${fmt(total)} 万 / ${fmt(a.budget * t.teams.length)} 万</span>
   </div>`;
@@ -428,7 +429,7 @@ function view(t) {
       <div class="au-cap">队长：${capPid ? `${esc(pname(P, capPid))}` : '<span class="hint">未定</span>'}
         ${editable ? `<button type="button" class="mini" data-au-cap="${tm.id}">设置</button>` : ''}</div>
       ${rows || '<div class="hint" style="padding:4px 2px">还没买人</div>'}
-      ${editable && st.slots > 0 ? `<div class="au-team-acts"><button type="button" class="mini au-add" data-au-buy="${tm.id}">＋ 录入成交</button><button type="button" class="mini" data-au-rec="${tm.id}" title="在剩余预算和硬约束下推荐一套阵容">荐阵容</button></div>` : ''}
+      ${editable && st.slots > 0 ? `<div class="au-team-acts"><button type="button" class="mini au-add" data-au-buy="${tm.id}">＋ 录入成交</button><button type="button" class="mini" data-au-rec="${tm.id}" title="在剩余预算和硬约束下推荐一套阵容">荐阵容</button><button type="button" class="mini" data-au-cplan="${tm.id}" title="队长视角：自填身价、止损价、失手备选">队长方案</button></div>` : ''}
     </div>`;
   }).join('')}</div>` : '<p class="empty">还没有队伍，点上面「生成队伍」。</p>';
 
@@ -816,6 +817,7 @@ document.addEventListener('click', e => {
   if (id === 'au-import') { openImport(t); return; }
   if (id === 'au-rec') { openRecommend(t, null); return; }
   if (b.dataset.auRec) { openRecommend(t, b.dataset.auRec); return; }
+  if (id === 'au-cplan' || b.dataset.auCplan) { if (window.DotaCaptain) window.DotaCaptain.open(t, b.dataset.auCplan || null); else toast('队长方案模块未加载（captain.js）', 'err'); return; }
   if (id === 'au-buy' || b.dataset.auBuy) { openBuy(t, null, b.dataset.auBuy); return; }
   if (b.dataset.auBuyP) { openBuy(t, b.dataset.auBuyP, null); return; }
   if (b.dataset.auCap) { openCaptain(t, b.dataset.auCap); return; }
@@ -943,5 +945,5 @@ setInterval(() => {
   el.classList.toggle('warn', left > 0 && left <= 10000);
 }, 250);
 
-window.DotaAuction = { view, TIER, TIERS, checkBid, teamStat, posGroup, autoLots, drawOrder, openLot, checkOpenBid, sealedRank, passLive, defaultDeal, lotsOf, recommendSquad, candidates, estPrice, PRICE_MODES, GOALS };
+window.DotaAuction = { view, TIER, TIERS, QUOTA, SIZE, MAX45, checkBid, teamStat, posGroup, groupPos, gradeOf, dealOf, lotRound, fmt, data: auc, autoLots, drawOrder, openLot, checkOpenBid, sealedRank, passLive, defaultDeal, lotsOf, recommendSquad, candidates, estPrice, PRICE_MODES, GOALS };
 })();
