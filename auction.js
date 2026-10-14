@@ -22,7 +22,7 @@ const TIER = {
   'D':   { base: 10, cap: 10, fair: 12,  max: 14,  step: 2, cls: '' },
 };
 const QUOTA = { S: 2, A: 3 };            // 五.4 每队 S 级(含 SSS) ≤2、A 系 ≤3
-const SIZE = 5;                          // 五.2 每队恰好 5 人
+const SIZE = 5;                          // 五.2 每队 5 名首发；a.size 可设成 6（第 6 人是替补），本届规则
 const DEF = { budget: 270, minPrice: 10 };  // 三.1 每队 270 万；五.1 保底按最低身价 10 万
 const MAX45 = 2;                         // 五.5 45 组禁打 1/2/3，故一队最多容纳 2 名 45 组选手
 const DEFAULT_PENALTY = 0.1;             // 六.3 成交后反悔罚该队预算 10%
@@ -56,8 +56,12 @@ function auc(t) {
   a.order ||= [];         // 六.1 抽签起拍顺序（teamId），全程有效
   a.penalties ||= [];     // 六.3 违约罚款
   if (!('live' in a)) a.live = null;
+  if (!a.size) a.size = SIZE;   // 每队总人数（含替补）
   return a;
 }
+const sizeOf = t => auc(t).size || SIZE;
+const subSlots = t => sizeOf(t) - SIZE;                 // 替补名额数
+const max45Of = t => MAX45 + subSlots(t);               // 替补可以是 45 组，所以 45 组上限随替补名额放宽
 const roundOf = (t, rid) => auc(t).rounds.find(r => r.id === rid) || null;
 const lotRound = (t, pid) => roundOf(t, auc(t).lots[pid]);
 // 六.3 违约罚款计入预算：该队可用预算 = 基础预算 − 罚款合计
@@ -73,7 +77,7 @@ function teamStat(t, tmId) {
   const deals = a.deals.filter(d => d.teamId === tmId);
   const spent = deals.reduce((s, d) => s + d.price, 0);
   const budget = budgetOf(t, tmId), fine = penaltyOf(t, tmId);
-  const left = budget - spent, slots = SIZE - deals.length;
+  const left = budget - spent, slots = sizeOf(t) - deals.length;
   const g = deals.map(d => a.grades[d.pid]);
   const sCnt = g.filter(x => TIER[x]?.cls === 'S').length;
   const aCnt = g.filter(x => TIER[x]?.cls === 'A').length;
@@ -89,22 +93,25 @@ function teamStat(t, tmId) {
   };
 }
 
-/* 五.3 阵容必须覆盖 1-5 各 1 人。
-   hard: 45 组选手只能占 4/5，超过 2 人就永远排不出 1-5（这是硬伤，规则五.5 单向锁定）
-   soft: 只按各人「擅长位置」能否完美匹配 —— 排不出说明得有人降位/换位打，不违规但要心里有数 */
+/* 五.3 阵容必须覆盖 1-5 各 1 人；有替补名额时多出来的人坐替补（号位记 0）。
+   hard: 45 组选手只能占 4/5，首发里超过 2 人就永远排不出 1-5（规则五.5 单向锁定）；替补可以是 45 组，上限随替补名额放宽
+   soft: 只按各人「擅长位置」能否排出 5 个首发覆盖 1-5 —— 排不出说明得有人降位/换位打，不违规但要心里有数 */
 function lineupCheck(t, pids) {
-  const P = playerMap();
-  const match = lists => {                            // 5 人各占一个号位的完美匹配，规模小直接回溯
-    const used = {}; const dfs = i => {
-      if (i === lists.length) return true;
-      for (const pos of lists[i]) if (!used[pos]) { used[pos] = true; if (dfs(i + 1)) return true; used[pos] = false; }
-      return false;
-    }; return dfs(0);
-  };
+  const P = playerMap(), size = sizeOf(t), subs = subSlots(t);
   const c45 = pids.filter(pid => posGroup(P.get(pid)) === '45').length;
   const strict = pids.map(pid => { const ps = P.get(pid)?.positions || []; return ps.length ? [...ps].sort() : [1, 2, 3, 4, 5]; });
-  const full = pids.length === SIZE;
-  return { hard: c45 <= MAX45, soft: !full || match(strict), full, c45 };
+  const full = pids.length === size;
+  const match = () => {                               // 最多 6 人，直接回溯：每人占一个号位或坐替补，最后 1-5 必须全有人
+    const used = new Set(); let bench = 0;
+    const dfs = i => {
+      if (i === strict.length) return [1, 2, 3, 4, 5].every(x => used.has(x));
+      for (const pos of strict[i]) if (!used.has(pos)) { used.add(pos); if (dfs(i + 1)) return true; used.delete(pos); }
+      if (bench < subs) { bench++; if (dfs(i + 1)) return true; bench--; }
+      return false;
+    };
+    return dfs(0);
+  };
+  return { hard: c45 <= max45Of(t), soft: !full || match(), full, c45, size };
 }
 
 /* 六条硬约束（五.1-五.6）逐条校验一笔出价。errors 阻断入账，warns 只提示 */
@@ -115,7 +122,7 @@ function checkBid(t, pid, tmId, price, opt = {}) {
   if (!p) errors.push('该选手已从「选手名单」删除');
   if (!g) errors.push('该选手还没有定级档位，先导入定级表');
   if (!opt.self && dealOf(t, pid)) errors.push('该选手已成交，要改先撤销原成交');
-  if (st.deals.length >= SIZE) errors.push(`该队已满 ${SIZE} 人`);            // 五.2
+  if (st.deals.length >= sizeOf(t)) errors.push(`该队已满 ${sizeOf(t)} 人`);            // 五.2
   if (st.banned) errors.push('该队已两次违约，按规则六.3 取消后续出价权');
   if (!(price > 0)) errors.push('成交价要大于 0');
   else if (T && price < T.base) errors.push(`低于 ${g} 档起拍底价 ${T.base} 万`);   // 二.3
@@ -129,15 +136,15 @@ function checkBid(t, pid, tmId, price, opt = {}) {
   if (T?.cls === 'S' && st.sCnt >= QUOTA.S) errors.push(`该队 S 级（含 SSS）已满 ${QUOTA.S} 人`);
   if (T?.cls === 'A' && st.aCnt >= QUOTA.A) errors.push(`该队 A 系已满 ${QUOTA.A} 人`);
   // 五.5 45 组名额（超过 2 人就排不出 1-5）
-  if (posGroup(p) === '45' && st.c45 >= MAX45) errors.push(`该队已有 ${MAX45} 名 45 组选手，再进将无法排出 1-5 号位`);
+  if (posGroup(p) === '45' && st.c45 >= max45Of(t)) errors.push(`该队已有 ${max45Of(t)} 名 45 组选手，再进将无法排出 1-5 号位`);
   // 软提示
   if (T && price > T.max) warns.push(`超过 ${g} 档建议上限 ${T.max} 万（均衡价 ${T.fair} × 120%），规则七.2 需主持人确认预算余量`);
   // 四.1 加价步长：成交价应落在 底价 + k×步长 上（底价本身即 k=0）
   if (T && (price - T.base) % T.step !== 0) warns.push(`${g} 档每次加价不低于 ${T.step} 万，${fmt(price)} 不在「底价 ${T.base} + ${T.step} 的整数倍」上`);
   if (p && !(p.positions || []).length) warns.push('该选手没填擅长位置，判不出 123 组 / 45 组');
-  if (!errors.length && st.deals.length + 1 === SIZE) {
+  if (!errors.length && st.deals.length + 1 === sizeOf(t)) {
     const test = lineupCheck(t, [...st.deals.map(d => d.pid), pid]);
-    if (!test.soft) warns.push('成交后满 5 人，但按各人擅长位置排不出 1-5，需有人降位打');
+    if (!test.soft) warns.push(`成交后满 ${sizeOf(t)} 人，但按各人擅长位置排不出 1-5，需有人降位打`);
   }
   return { ok: !errors.length, errors, warns };
 }
@@ -294,7 +301,7 @@ function recommendSquad(t, tmId, opt) {
   const cands = opt.cands;
   if (cands.length < need) return { ok: false, msg: `未成交选手只剩 ${cands.length} 人，凑不满 ${need} 个空位` };
 
-  const roomS = QUOTA.S - st.sCnt, roomA = QUOTA.A - st.aCnt, room45 = MAX45 - st.c45;
+  const roomS = QUOTA.S - st.sCnt, roomA = QUOTA.A - st.aCnt, room45 = max45Of(t) - st.c45, subs = subSlots(t);
   const cap = opt.goal === 'save' ? st.left * SAVE_RATIO : st.left;
   const key = opt.goal === 'value' ? 'value' : 'score';
   // 号位排不齐不违规（可以有人降位打），但要压低优先级
@@ -304,23 +311,28 @@ function recommendSquad(t, tmId, opt) {
      五.3 要求 5 人覆盖 1-5 各一个 —— 纯性价比贪心会选出一堆同号位的人（实测三套方案全是
      「123组·1」重复三次），阵容再便宜也没法用。所以先给已买的人定位，再为每个空号位挑人。 */
   const P2 = playerMap();
-  const posOf = pid => { const ps = P2.get(pid)?.positions || []; return ps.length ? [...ps] : [1, 2, 3, 4, 5]; };
+  // 号位 0 = 替补席（有替补名额时才存在），谁都能坐
+  const posOf = pid => { const ps = P2.get(pid)?.positions || []; const base = ps.length ? [...ps] : [1, 2, 3, 4, 5]; return subs ? [...base, 0] : base; };
   // 45 组只能占 4/5（五.5 单向锁定）；123 组可自愿降打 4/5，不违规
-  const canPlay = (c, pos) => c.grp === '45' ? pos >= 4 : true;
-  const isGood = (c, pos) => (c.p.positions || []).includes(pos);      // 本来就擅长这个位
+  const canPlay = (c, pos) => pos === 0 ? true : c.grp === '45' ? pos >= 4 : true;
+  const isGood = (c, pos) => pos !== 0 && (c.p.positions || []).includes(pos);      // 本来就擅长这个位
 
-  // 给已买的人分配号位，返回还空着的号位；顺序随机化，让不同重启探索到不同分配
+  // 给已买的人分配号位（或替补席），返回还空着的号位；顺序随机化，让不同重启探索到不同分配
+  // 已买的人（通常是队长）优先排首发，只有首发排不开时才让他坐替补席 —— 买来的人不计入总分，不这么限制会被算法赶去替补腾位置
   const fixedOpen = () => {
     const idx = fixed.map((pid, i) => i).sort(() => Math.random() - 0.5);
-    const used = new Set();
-    const dfs = k => {
+    const used = new Set(); let bench = 0;
+    const dfs = (k, allowBench) => {
       if (k === idx.length) return true;
       const opts = [...posOf(fixed[idx[k]])].sort(() => Math.random() - 0.5);
-      for (const pos of opts) if (!used.has(pos)) { used.add(pos); if (dfs(k + 1)) return true; used.delete(pos); }
+      for (const pos of opts) {
+        if (pos === 0) { if (!allowBench || bench >= subs) continue; bench++; if (dfs(k + 1, allowBench)) return true; bench--; }
+        else if (!used.has(pos)) { used.add(pos); if (dfs(k + 1, allowBench)) return true; used.delete(pos); }
+      }
       return false;
     };
-    if (!dfs(0)) return null;                                          // 已买的人自己就排不开
-    return [1, 2, 3, 4, 5].filter(x => !used.has(x));
+    if (!dfs(0, false) && !dfs(0, true)) return null;                 // 已买的人自己就排不开
+    return [...[1, 2, 3, 4, 5].filter(x => !used.has(x)), ...Array(subs - bench).fill(0)];
   };
 
   const build = order => {
@@ -398,6 +410,7 @@ function view(t) {
   const cfg = `<div class="tn-toolbar">
     <label class="narrow">每队预算<input type="number" id="au-budget" min="1" max="99999" value="${a.budget}" ${editable ? '' : 'disabled'}></label>
     <label class="narrow" title="保底约束用：剩余预算须 ≥ 剩余名额 × 该值">最低身价<input type="number" id="au-min" min="1" max="999" value="${a.minPrice}" ${editable ? '' : 'disabled'}></label>
+    <label class="narrow" title="每队总人数：5 名首发 + 替补。设 6 = 本届每队多拍 1 名替补；替补可以是 45 组，45 组上限随之放宽">每队人数<input type="number" id="au-size" min="5" max="8" value="${a.size}" ${editable ? '' : 'disabled'}></label>
     ${editable ? `<button type="button" class="primary" id="au-import">导入定级表</button>
     <button type="button" id="au-mkteams" title="按规则一次性建满队伍并命名">生成队伍</button>
     <button type="button" id="au-rec">性价比阵容推荐</button>
@@ -425,7 +438,7 @@ function view(t) {
       <div class="tn-team-head"><span class="tn-seed">#${ti + 1}</span><strong>${esc(tm.name)}</strong></div>
       <div class="au-money"><b>${fmt(st.spent)}</b> / ${fmt(st.budget)} 万${st.fine ? ` <span class="loss" title="六.3 违约罚款">−${fmt(st.fine)} 罚</span>` : ''} · 剩 <b class="${st.bankrupt ? 'loss' : ''}">${fmt(st.left)}</b> · 名额 ${st.slots}
         ${st.slots > 0 ? ` · 均价 <b class="${st.afford < a.minPrice * 1.5 ? 'loss' : 'win'}">${fmt(st.afford)}</b>` : ' · <span class="win">满编</span>'}</div>
-      <div class="au-quotas">${quotaChip(st.deals.length, SIZE, '人数')}${quotaChip(st.sCnt, QUOTA.S, 'S级')}${quotaChip(st.aCnt, QUOTA.A, 'A系')}${quotaChip(st.c45, MAX45, '45组')}${risk}${lineWarn}</div>
+      <div class="au-quotas">${quotaChip(st.deals.length, sizeOf(t), '人数')}${quotaChip(st.sCnt, QUOTA.S, 'S级')}${quotaChip(st.aCnt, QUOTA.A, 'A系')}${quotaChip(st.c45, max45Of(t), '45组')}${risk}${lineWarn}</div>
       <div class="au-cap">队长：${capPid ? `${esc(pname(P, capPid))}` : '<span class="hint">未定</span>'}
         ${editable ? `<button type="button" class="mini" data-au-cap="${tm.id}">设置</button>` : ''}</div>
       ${rows || '<div class="hint" style="padding:4px 2px">还没买人</div>'}
@@ -628,7 +641,7 @@ function openRecommend(t, tmId) {
       if (!r.ok) return `<div class="au-plan"><div class="au-plan-h"><b>${GOALS[goal]}</b></div><p class="empty">${esc(r.msg)}</p></div>`;
       const rows = [...r.pick].sort((x, y) => (x.pos || 9) - (y.pos || 9)).map(c => `<tr>
         <td><span class="au-t t${c.g.replace('+', 'p').replace('-', 'm')}">${esc(c.g)}</span></td>
-        <td><b class="au-pos">${c.pos || '?'}</b> ${esc(c.p.name)}<span class="hint"> ${esc(groupTxt(c.grp))}${(c.p.positions || []).length ? '·' + c.p.positions.join('/') : ''}${c.pos && !(c.p.positions || []).includes(c.pos) ? ' <i>降位</i>' : ''}</span></td>
+        <td><b class="au-pos">${c.pos === 0 ? '替' : c.pos || '?'}</b> ${esc(c.p.name)}<span class="hint"> ${esc(groupTxt(c.grp))}${(c.p.positions || []).length ? '·' + c.p.positions.join('/') : ''}${c.pos && !(c.p.positions || []).includes(c.pos) ? ' <i>降位</i>' : ''}</span></td>
         <td class="num">${fmt(c.price)}</td><td class="num">${c.score.toFixed(1)}</td><td class="num"><b>${c.value.toFixed(2)}</b></td></tr>`).join('');
       const leftAfter = st.left - r.cost;
       return `<div class="au-plan">
@@ -648,7 +661,7 @@ function openRecommend(t, tmId) {
         ${recUI.exclude.size ? `<button type="button" class="ghost" id="rc-clear">已避开 ${recUI.exclude.size} 人，恢复</button>` : ''}
       </div>
       <p class="hint">「${esc(tm?.name || '')}」剩 <b>${fmt(st.left)}</b> 万 / <b>${st.slots}</b> 个名额 ·
-        余量：S级 ${QUOTA.S - st.sCnt} / A系 ${QUOTA.A - st.aCnt} / 45组 ${MAX45 - st.c45} ·
+        余量：S级 ${QUOTA.S - st.sCnt} / A系 ${QUOTA.A - st.aCnt} / 45组 ${max45Of(t) - st.c45} ·
         候选 ${cands.length} 人。价格是<b>预估</b>，实际以竞价结果为准；性价比 = 评分 ÷ 预估价。</p>
       <div class="au-plans">${plans.map(planCard).join('')}</div>
       <div class="form-actions" style="justify-content:flex-end"><button type="button" class="ghost" id="rc-close">关闭</button></div>`);
@@ -731,7 +744,7 @@ function openCaptain(t, tmId) {
     if (!pid) { $c.innerHTML = '<p class="hint" style="margin:4px 0">该队 5 个名额全部用于拍卖。</p>'; $('#au-c-ok').disabled = false; return { ok: true, warns: [] }; }
     const g = gradeOf(t, pid), price = TIER[g]?.cap ?? 0;
     const r = checkBid(t, pid, tmId, price, { self: pid === curCap });
-    $c.innerHTML = `<p class="hint" style="margin:4px 0">占用身价 <b>${fmt(price)}</b> 万（${g} 档底价 ${TIER[g]?.base} × 溢价），占 1 个名额，该队再拍 ${SIZE - st.deals.length - (pid === curCap ? 0 : 1)} 人。</p>
+    $c.innerHTML = `<p class="hint" style="margin:4px 0">占用身价 <b>${fmt(price)}</b> 万（${g} 档底价 ${TIER[g]?.base} × 溢价），占 1 个名额，该队再拍 ${sizeOf(t) - st.deals.length - (pid === curCap ? 0 : 1)} 人。</p>
       ${r.errors.map(x => `<p class="loss" style="margin:4px 0">✗ ${esc(x)}</p>`).join('')}
       ${r.warns.map(x => `<p class="hint" style="margin:4px 0">⚠ ${esc(x)}</p>`).join('')}`;
     $('#au-c-ok').disabled = !r.ok;
@@ -925,6 +938,12 @@ document.addEventListener('change', e => {
   const el = e.target;
   if (el.id === 'au-budget') { auc(t).budget = Math.max(1, Number(el.value) || DEF.budget); save(); TN.render(); return; }
   if (el.id === 'au-min') { auc(t).minPrice = Math.max(1, Number(el.value) || DEF.minPrice); save(); TN.render(); return; }
+  if (el.id === 'au-size') {
+    const n = Math.min(8, Math.max(SIZE, Math.round(Number(el.value)) || SIZE)); auc(t).size = n;
+    // 队伍阵容槽位跟着变：补 null 到 n 个；缩小时只去掉末尾的空位，已有人不动
+    for (const tm of t.teams) { while (tm.players.length < n) tm.players.push(null); while (tm.players.length > n && tm.players[tm.players.length - 1] == null) tm.players.pop(); }
+    save(); TN.render(); return;
+  }
   if (el.id === 'au-open') { ui.onlyOpen = el.checked; TN.render(); return; }
   if (el.dataset.auSealed) { const a = auc(t); if (a.live) { const v = Number(el.value) || 0; if (v > 0) a.live.sealed[el.dataset.auSealed] = v; else delete a.live.sealed[el.dataset.auSealed]; save(); } return; }
   const rtr = el.closest('tr[data-round]');
@@ -945,5 +964,5 @@ setInterval(() => {
   el.classList.toggle('warn', left > 0 && left <= 10000);
 }, 250);
 
-window.DotaAuction = { view, TIER, TIERS, QUOTA, SIZE, MAX45, checkBid, teamStat, posGroup, groupPos, gradeOf, dealOf, lotRound, fmt, data: auc, autoLots, drawOrder, openLot, checkOpenBid, sealedRank, passLive, defaultDeal, lotsOf, recommendSquad, candidates, estPrice, PRICE_MODES, GOALS };
+window.DotaAuction = { view, TIER, TIERS, QUOTA, SIZE, MAX45, sizeOf, subSlots, max45Of, checkBid, teamStat, posGroup, groupPos, gradeOf, dealOf, lotRound, fmt, data: auc, autoLots, drawOrder, openLot, checkOpenBid, sealedRank, passLive, defaultDeal, lotsOf, recommendSquad, candidates, estPrice, PRICE_MODES, GOALS };
 })();

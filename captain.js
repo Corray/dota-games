@@ -8,7 +8,9 @@
 const A = window.DotaApp, TN = window.DotaTournament, AU = window.DotaAuction;
 if (!A || !TN || !AU) { console.error('captain.js 必须在 app.js、tournament.js、auction.js 之后加载'); return; }
 const { $, esc, toast, showModal, hideModal, playerMap, pname } = A;
-const { TIER, TIERS, QUOTA, SIZE, MAX45, teamStat, posGroup, gradeOf, dealOf, lotRound, fmt, groupPos, data: auc, PRICE_MODES } = AU;
+const { TIER, TIERS, QUOTA, SIZE, sizeOf, subSlots, max45Of, teamStat, posGroup, gradeOf, dealOf, lotRound, fmt, groupPos, data: auc, PRICE_MODES } = AU;
+const SUB_W = 0.5;             // 替补的实力和配合分按一半算：上场机会少，但也不能是废牌
+const posLbl = p => p ? String(p) : '替';
 const S = () => A.state;
 
 // ============ 私有方案存取 ============
@@ -49,6 +51,7 @@ function buildCands(t, plan) {
     return { pid: p.id, p, g, cls: TIER[g]?.cls || '', grp: posGroup(p), price, mine: mine > 0, score: strengthOf(sc.score, g, plan.strength), rawScore: sc.score, games: stats[p.id]?.g || 0, must: plan.must.includes(p.id), avoid: plan.avoid.includes(p.id), round: lotRound(t, p.id) };
   });
   list.syn = plan.synergy === false ? new Map() : synergyMap(all.duos);   // 搭档表挂在候选数组上，求解和展示共用
+  list.strengthOf = pid => { const p = playerMap().get(pid); return p ? strengthOf(A.playerScore(stats[pid], p, so).score, gradeOf(t, pid), plan.strength) : 0; };   // 已在队的人也要算实力
   return list;
 }
 
@@ -56,40 +59,47 @@ function buildCands(t, plan) {
 /* 精确搜索而不是贪心：先把已买的人排到号位上（所有合法排法都试），再为每个空号位挑人。
    每个号位只看该位有效分最高的 K 人 + 必抢的人，K=10 时最多 10^4 种组合，毫秒级。
    目标：总评分 + 阵容内两两搭档配合分 最高，同分取便宜的；降位打的人（能打但不擅长）评分打九折。
-   约束：预算 − 自留、S 级 ≤2、A 系 ≤3、45 组 ≤2（45 组只能占 4/5）、必抢全在、不要的不进 */
+   有替补名额时多一个「号位 0 = 替补席」，谁都能坐，实力按 SUB_W 折算。
+   约束：预算 − 自留、S 级 ≤2、A 系 ≤3、45 组 ≤2 + 替补数（45 组首发只能占 4/5）、必抢全在、不要的不进 */
 const K = 10;
 function solve(t, tmId, cands, plan, excludePid) {
   const st = teamStat(t, tmId);
   if (st.slots <= 0) return { ok: false, msg: '该队已满编' };
   const fixed = st.deals.map(d => d.pid);
-  const P = playerMap();
-  const posOf = pid => { const ps = P.get(pid)?.positions || []; return ps.length ? [...ps] : [1, 2, 3, 4, 5]; };
+  const P = playerMap(), subs = subSlots(t), max45 = max45Of(t);
+  const posOf = pid => { const ps = P.get(pid)?.positions || []; const base = ps.length ? [...ps] : [1, 2, 3, 4, 5]; return subs ? [...base, 0] : base; };
   const cap = st.left - plan.reserve;
   const pool = cands.filter(c => !c.avoid && c.pid !== excludePid && c.price > 0);
   const mustIds = pool.filter(c => c.must).map(c => c.pid);
-  const canPlay = (c, pos) => c.grp === '45' ? pos >= 4 : true;
-  const good = (c, pos) => (c.p.positions || []).includes(pos);
-  const eff = (c, pos) => good(c, pos) ? c.score : c.score * 0.9;
+  const canPlay = (c, pos) => pos === 0 ? true : c.grp === '45' ? pos >= 4 : true;
+  const good = (c, pos) => pos === 0 || (c.p.positions || []).includes(pos);
+  const eff = (c, pos) => pos === 0 ? c.score * SUB_W : good(c, pos) ? c.score : c.score * 0.9;
   const syn = cands.syn || new Map();
   const synWith = (pid, others) => { let s = 0; for (const o of others) { const d = synOf(syn, pid, o); if (d) s += d.v; } return s; };
   // 剪枝用的配合分上界：任何一个人最多还能从剩余名额里拿到的正配合分
   const synUpper = Math.max(0, ...pool.map(c => [...syn.entries()].filter(([k, d]) => d.v > 0 && k.split('|').includes(c.pid)).map(([, d]) => d.v).sort((a, b) => b - a).slice(0, SIZE - 1).reduce((s, v) => s + v, 0)));
   const fixedAssigns = [];
-  (function dfs(i, used, acc) {
+  (function dfs(i, used, bench, acc) {
     if (i === fixed.length) { fixedAssigns.push([...acc]); return; }
-    for (const pos of posOf(fixed[i])) if (!used.has(pos)) { used.add(pos); acc.push(pos); dfs(i + 1, used, acc); acc.pop(); used.delete(pos); }
-  })(0, new Set(), []);
+    for (const pos of posOf(fixed[i])) {
+      if (pos === 0) { if (bench >= subs) continue; acc.push(0); dfs(i + 1, used, bench + 1, acc); acc.pop(); }
+      else if (!used.has(pos)) { used.add(pos); acc.push(pos); dfs(i + 1, used, bench, acc); acc.pop(); used.delete(pos); }
+    }
+  })(0, new Set(), 0, []);
   if (!fixedAssigns.length) return { ok: false, msg: '已买的人按擅长位置就排不开 1-5' };
+  // 已在队的人按这次排法贡献的实力：首发全额（不擅长九折）、替补席减半。不算进去的话求解器会把队长赶去替补腾位置
+  const fixedStrength = asg => fixed.reduce((s, pid, i) => { const v = (cands.strengthOf ? cands.strengthOf(pid) : 0); const pos = asg[i]; return s + (pos === 0 ? v * SUB_W : (P.get(pid)?.positions || []).includes(pos) || !(P.get(pid)?.positions || []).length ? v : v * 0.9); }, 0);
   const seenOpen = new Set(); let best = null;
   for (const asg of fixedAssigns) {
-    const open = [1, 2, 3, 4, 5].filter(x => !asg.includes(x));
-    const key = open.join(''); if (seenOpen.has(key)) continue; seenOpen.add(key);
+    const open = [...[1, 2, 3, 4, 5].filter(x => !asg.includes(x)), ...Array(subs - asg.filter(x => x === 0).length).fill(0)];
+    const base = fixedStrength(asg);
+    const key = open.join('') + '|' + base.toFixed(3); if (seenOpen.has(key)) continue; seenOpen.add(key);
     const lists = open.map(pos => { const l = pool.filter(c => canPlay(c, pos)).sort((a, b) => eff(b, pos) - eff(a, pos)); return [...l.filter(c => c.must), ...l.filter(c => !c.must).slice(0, K)]; });
     const order = open.map((_, i) => i).sort((a, b) => lists[a].length - lists[b].length);   // 候选少的号位先定，剪枝更早
     const upper = order.map(i => lists[i].length ? Math.max(...lists[i].map(c => eff(c, open[i]))) : 0);
     const rem = []; for (let k = order.length - 1, s = 0; k >= 0; k--) { s += upper[k]; rem[k] = s; }
     const pick = new Array(open.length).fill(null); const taken = new Set();
-    let cost = 0, uS = st.sCnt, uA = st.aCnt, u45 = st.c45, total = 0, synTotal = 0;
+    let cost = 0, uS = st.sCnt, uA = st.aCnt, u45 = st.c45, total = base, synTotal = 0;
     const dfs = k => {
       if (k === order.length) {
         if (mustIds.some(id => !taken.has(id))) return;
@@ -104,9 +114,9 @@ function solve(t, tmId, cands, plan, excludePid) {
         if (taken.has(c.pid)) continue;
         if (c.cls === 'S' && uS >= QUOTA.S) continue;
         if (c.cls === 'A' && uA >= QUOTA.A) continue;
-        if (c.grp === '45' && u45 >= MAX45) continue;
+        if (c.grp === '45' && u45 >= max45) continue;
         if (cost + c.price > cap + 1e-9) continue;
-        const sAdd = synWith(c.pid, [...fixed, ...taken]);
+        const sAdd = synWith(c.pid, [...fixed, ...taken]) * (pos === 0 ? SUB_W : 1);
         pick[i] = c; taken.add(c.pid); cost += c.price; total += eff(c, pos); synTotal += sAdd;
         if (c.cls === 'S') uS++; else if (c.cls === 'A') uA++;
         if (c.grp === '45') u45++;
@@ -147,7 +157,7 @@ function makePlan(t, tmId, cands, plan) {
     const ceil = Math.max(snap(raw, x.g), x.price);
     const sd = synDetail(x.pid);
     return { ...x, budgetCeil, valueCeil, ceil, alt: altDiff, noAlt: !x.must && !alt.ok, overMax: !!TIER[x.g] && ceil > TIER[x.g].max, synDetail: sd, synSum: sd.reduce((s, d) => s + d.v, 0) };
-  }).sort((a, b) => roundIdx(t, a) - roundIdx(t, b) || a.pos - b.pos);
+  }).sort((a, b) => roundIdx(t, a) - roundIdx(t, b) || (a.pos || 9) - (b.pos || 9));
   return { ...main, targets };
 }
 
@@ -231,16 +241,16 @@ function open(t, tmId) {
     const st = teamStat(t, cui.tmId);
     const cands = buildCands(t, plan);
     const priced = cands.filter(c => c.price > 0);
-    $('#cp-sum').innerHTML = `剩 <b>${fmt(st.left)}</b> 万 / <b>${st.slots}</b> 个名额${plan.reserve ? `，自留 ${fmt(plan.reserve)} 后可用 <b>${fmt(st.left - plan.reserve)}</b>` : ''} · 余量：S级 ${QUOTA.S - st.sCnt} / A系 ${QUOTA.A - st.aCnt} / 45组 ${MAX45 - st.c45} · 候选 ${priced.length} 人（自填身价 ${cands.filter(c => c.mine).length}${cands.length - priced.length ? `，${cands.length - priced.length} 人没档位也没身价，不参与` : ''}）`;
+    $('#cp-sum').innerHTML = `剩 <b>${fmt(st.left)}</b> 万 / <b>${st.slots}</b> 个名额${subSlots(t) ? `（每队 ${sizeOf(t)} 人，含 ${subSlots(t)} 名替补）` : ''}${plan.reserve ? `，自留 ${fmt(plan.reserve)} 后可用 <b>${fmt(st.left - plan.reserve)}</b>` : ''} · 余量：S级 ${QUOTA.S - st.sCnt} / A系 ${QUOTA.A - st.aCnt} / 45组 ${max45Of(t) - st.c45} · 候选 ${priced.length} 人（自填身价 ${cands.filter(c => c.mine).length}${cands.length - priced.length ? `，${cands.length - priced.length} 人没档位也没身价，不参与` : ''}）`;
     const r = makePlan(t, cui.tmId, cands, plan);
     const box = $('#cp-right');
     if (!r.ok) { box.innerHTML = `<div class="au-plan"><div class="au-plan-h"><b>最优阵容</b></div><p class="empty">${esc(r.msg)}</p></div>`; return; }
     const P2 = playerMap();
     const synCell = x => { if (!x.synDetail.length) return '<span class="hint">-</span>'; const tip = x.synDetail.map(d => `和 ${d.name} 同队 ${d.w} 胜 ${d.g - d.w} 负 → ${d.v > 0 ? '+' : ''}${d.v.toFixed(1)}`).join('\n'); return `<span class="${x.synSum > 0 ? 'win' : x.synSum < 0 ? 'loss' : ''}" title="${esc(tip)}">${x.synSum > 0 ? '+' : ''}${x.synSum.toFixed(1)}</span>`; };
-    const fixedRows = r.fixedPos.map(f => `<tr class="cp-fixed"><td><b class="au-pos">${f.pos}</b></td><td>${esc(pname(P2, f.pid))}<span class="hint"> 已在队</span></td><td></td><td></td><td class="num hint">${fmt(st.deals.find(d => d.pid === f.pid)?.price || 0)}</td><td></td><td></td></tr>`).join('');
+    const fixedRows = r.fixedPos.map(f => `<tr class="cp-fixed"><td><b class="au-pos">${posLbl(f.pos)}</b></td><td>${esc(pname(P2, f.pid))}<span class="hint"> 已在队</span></td><td></td><td></td><td class="num hint">${fmt(st.deals.find(d => d.pid === f.pid)?.price || 0)}</td><td></td><td></td></tr>`).join('');
     const altText = x => x.must ? '<span class="hint">必抢，不设备选</span>' : x.noAlt ? '<span class="loss">没他就凑不齐</span>' : x.alt.in.length ? `${x.alt.in.map(y => `<b>${esc(y.p.name)}</b><span class="hint">${fmt(y.price)}</span>`).join('、')}${x.alt.out.length ? `<span class="hint">（换下 ${x.alt.out.map(y => esc(y.p.name)).join('、')}）</span>` : ''}` : '-';
-    const targetRows = [...r.targets].sort((a, b) => a.pos - b.pos).map(x => `<tr>
-      <td><b class="au-pos">${x.pos}</b>${x.down ? '<i class="hint" title="不擅长这个位，降位打">↓</i>' : ''}</td>
+    const targetRows = [...r.targets].sort((a, b) => (a.pos || 9) - (b.pos || 9)).map(x => `<tr>
+      <td><b class="au-pos" title="${x.pos ? x.pos + ' 号位' : '替补：实力和配合按一半计'}">${posLbl(x.pos)}</b>${x.down ? '<i class="hint" title="不擅长这个位，降位打">↓</i>' : ''}</td>
       <td><b>${esc(x.p.name)}</b>${x.must ? '<span class="pc">必抢</span>' : ''}<span class="hint"> ${esc(x.g || '')}</span></td>
       <td class="num">${x.score.toFixed(1)}</td>
       <td class="num">${synCell(x)}</td>
@@ -250,7 +260,7 @@ function open(t, tmId) {
     const byRound = [];
     for (const x of r.targets) { const idx = roundIdx(t, x); const last = byRound[byRound.length - 1]; if (last && last.idx === idx) last.items.push(x); else byRound.push({ idx, name: x.round ? x.round.name : '未编排轮次', items: [x] }); }
     let running = st.left;
-    const roundBlocks = byRound.map(b => { const lines = b.items.map(x => { running -= x.price; return `<li><b class="au-pos">${x.pos}</b> ${esc(x.p.name)}：身价 ${fmt(x.price)}，<b>最多出到 ${fmt(x.ceil)}</b>${x.overMax ? `<span class="loss" title="规则七.2：超过档位上限需主持人确认预算余量"> 超档位上限 ${TIER[x.g].max}</span>` : ''}${x.must ? '' : x.noAlt ? '，<span class="loss">失手就凑不齐人</span>' : x.alt.in.length ? `，失手改抢 ${x.alt.in.map(y => esc(y.p.name) + ' ' + fmt(y.price)).join(' / ')}` : ''}</li>`; }).join(''); return `<div class="cp-round"><div class="cp-round-h">${esc(b.name)} <span class="hint">按身价买完剩 ${fmt(running)}</span></div><ul>${lines}</ul></div>`; }).join('');
+    const roundBlocks = byRound.map(b => { const lines = b.items.map(x => { running -= x.price; return `<li><b class="au-pos">${posLbl(x.pos)}</b> ${esc(x.p.name)}：身价 ${fmt(x.price)}，<b>最多出到 ${fmt(x.ceil)}</b>${x.overMax ? `<span class="loss" title="规则七.2：超过档位上限需主持人确认预算余量"> 超档位上限 ${TIER[x.g].max}</span>` : ''}${x.must ? '' : x.noAlt ? '，<span class="loss">失手就凑不齐人</span>' : x.alt.in.length ? `，失手改抢 ${x.alt.in.map(y => esc(y.p.name) + ' ' + fmt(y.price)).join(' / ')}` : ''}</li>`; }).join(''); return `<div class="cp-round"><div class="cp-round-h">${esc(b.name)} <span class="hint">按身价买完剩 ${fmt(running)}</span></div><ul>${lines}</ul></div>`; }).join('');
     const warns = [];
     if (r.targets.some(x => !x.mine)) warns.push('带 * 的身价是按档位估的，填上你的预期会更准');
     if (r.targets.some(x => x.down)) warns.push('带 ↓ 的人要降位打（123 组降打 4/5 不违规）');
@@ -300,8 +310,9 @@ function planText(t, plan) {
   const out = [`【${tm?.name || ''} 队长方案】剩 ${fmt(st.left)} 万 / ${st.slots} 名额${plan.reserve ? `，自留 ${fmt(plan.reserve)}` : ''}`];
   if (!r.ok) { out.push(r.msg); return out.join('\n'); }
   out.push(`最优阵容：合计身价 ${fmt(r.cost)} 万，总分 ${r.total.toFixed(0)}${r.syn ? `（实力 ${r.strength.toFixed(0)}，搭档 ${r.syn > 0 ? '+' : ''}${r.syn.toFixed(0)}）` : ''}`);
-  for (const f of r.fixedPos) out.push(`  ${f.pos}号位 ${pname(playerMap(), f.pid)}（已在队）`);
-  for (const x of [...r.targets].sort((a, b) => a.pos - b.pos)) out.push(`  ${x.pos}号位 ${x.p.name}${x.g ? ' ' + x.g : ''}${x.down ? '（降位）' : ''}：身价 ${fmt(x.price)}，止损 ${fmt(x.ceil)}${x.synDetail.length ? `，配合 ${x.synSum > 0 ? '+' : ''}${x.synSum.toFixed(1)}（${x.synDetail.map(d => `${d.name} ${d.w}/${d.g}`).join('、')}）` : ''}${x.must ? '，必抢' : x.noAlt ? '，无备选' : x.alt.in.length ? '，失手改抢 ' + x.alt.in.map(y => `${y.p.name} ${fmt(y.price)}`).join(' / ') : ''}`);
+  const lbl = p => p ? `${p}号位` : '替补';
+  for (const f of r.fixedPos) out.push(`  ${lbl(f.pos)} ${pname(playerMap(), f.pid)}（已在队）`);
+  for (const x of [...r.targets].sort((a, b) => (a.pos || 9) - (b.pos || 9))) out.push(`  ${lbl(x.pos)} ${x.p.name}${x.g ? ' ' + x.g : ''}${x.down ? '（降位）' : ''}：身价 ${fmt(x.price)}，止损 ${fmt(x.ceil)}${x.synDetail.length ? `，配合 ${x.synSum > 0 ? '+' : ''}${x.synSum.toFixed(1)}（${x.synDetail.map(d => `${d.name} ${d.w}/${d.g}`).join('、')}）` : ''}${x.must ? '，必抢' : x.noAlt ? '，无备选' : x.alt.in.length ? '，失手改抢 ' + x.alt.in.map(y => `${y.p.name} ${fmt(y.price)}`).join(' / ') : ''}`);
   out.push('拍卖顺序：');
   let running = st.left, cur = null;
   for (const x of r.targets) { const name = x.round ? x.round.name : '未编排轮次'; if (name !== cur) { cur = name; out.push(`${name}`); } running -= x.price; out.push(`  ${x.p.name}：最多出到 ${fmt(x.ceil)}（买完剩 ${fmt(running)}）`); }

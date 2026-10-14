@@ -871,7 +871,8 @@ function presetRRDE() { return [{ ...newStage('rr'), name: '循环赛', bo: 1, a
 function validateStart(t) {
   if (!rosterPlayers(t).length) return '还没有挑参赛选手';
   if (t.teams.length < 2) return '至少要 2 支队伍';
-  for (const tm of t.teams) if (tm.players.filter(Boolean).length !== 5) return `「${tm.name}」不满 5 人`;
+  const maxSize = t.auction?.size || 5;   // 拍卖选马可设每队 6 人（第 6 人是替补）
+  for (const tm of t.teams) { const n = tm.players.filter(Boolean).length; if (n < 5) return `「${tm.name}」不满 5 人`; if (n > maxSize) return `「${tm.name}」超过 ${maxSize} 人`; }
   const all = t.teams.flatMap(x => x.players); if (new Set(all).size !== all.length) return '有选手同时在两支队伍里';
   if (!t.stages.length) return '至少要配置一个阶段';
   for (const s of t.stages) if (s.type === 'groups' && t.teams.length < (s.groupCount || 2) * 2) return `「${s.name}」分 ${s.groupCount || 2} 组至少要 ${(s.groupCount || 2) * 2} 队`;
