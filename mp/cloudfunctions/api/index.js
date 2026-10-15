@@ -2,10 +2,13 @@
  * 小程序云函数 api：读百度云 MySQL 里的 dota_state（网页版 server/ 写的同一张表）
  *   { action: 'meta' }            → { ok, version, updatedAt }
  *   { action: 'data', part: n }   → { ok, version, updatedAt, parts, part, players?(仅 part 0), matches: 第 n 页 }
+ *   { action: 'match', id }       → { ok, match }：单场完整记录（含完整录像解析：经验 / 胜率曲线、资源、BP），录像详情页用
+ *   { action: 'ladder', pid }     → { ok, at, profile, heroes, recent, counts, errs }：代查 OpenDota 天梯资料（10 分钟缓存）
  * 数据库连接信息走云函数环境变量 MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASSWORD / MYSQL_DATABASE（mp/deploy.js 从 server/.env 读取后设置），不进代码。
  * 第一期只读；写入（录比赛）放第二期，按微信 openid 白名单鉴权。
  */
 const mysql = require('mysql2/promise');
+const https = require('https');
 
 const PAGE = 200;   // 每页比赛数：小程序本地缓存单个 key 上限 1MB，云函数返回也别太大
 let pool = null;
@@ -33,14 +36,60 @@ function slim(data) {
   };
 }
 
-let cache = null;   // 同一个热实例里复用，版本没变就不重新解析 1MB 的 JSON
+let cache = null, raw = null;   // 同一个热实例里复用，版本没变就不重新解析 1MB 的 JSON；raw = 未精简的完整数据
 async function readAll() {
   const meta = await readMeta();
   if (cache && cache.version === meta.version) return cache;
   const [[r]] = await getPool().query("SELECT version, updated_at, data FROM dota_state WHERE id = 'state'");
-  const d = r && r.data ? slim(JSON.parse(r.data)) : { players: [], matches: [] };
+  raw = r && r.data ? JSON.parse(r.data) : { players: [], matches: [] };
+  const d = slim(raw);
   cache = { version: r ? r.version : 0, updatedAt: r ? r.updated_at : null, ...d };
   return cache;
+}
+
+// ---------- OpenDota 天梯资料（与网页 fetchLadder 同四个接口）----------
+const OPENDOTA = 'https://api.opendota.com/api';
+function getJson(url, ms) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { 'User-Agent': 'dota-games-mp' } }, res => {
+      let body = ''; res.setEncoding('utf8');
+      res.on('data', c => { body += c; });
+      res.on('end', () => {
+        if (res.statusCode === 429) return reject(new Error('请求太频繁，稍等一分钟再试'));
+        if (res.statusCode === 404) return reject(new Error('OpenDota 没有这个账号'));
+        if (res.statusCode !== 200) return reject(new Error('返回 ' + res.statusCode));
+        try { resolve(JSON.parse(body)); } catch (e) { reject(new Error('返回内容不是 JSON')); }
+      });
+    });
+    req.setTimeout(ms, () => req.destroy(new Error('超时')));
+    req.on('error', reject);
+  });
+}
+const pickKeys = (o, keys) => o ? Object.fromEntries(keys.filter(k => o[k] !== undefined).map(k => [k, o[k]])) : o;
+const ladderCache = new Map();
+const LADDER_TTL = 10 * 60 * 1000;
+async function ladder(pid, force) {
+  await readAll();
+  const p = (raw.players || []).find(x => x.id === pid);
+  if (!p) throw new Error('找不到这名选手');
+  const acc = p.accountId;
+  if (!acc) return { noAccount: true };
+  const hit = ladderCache.get(acc);
+  if (hit && !force && Date.now() - hit.at < LADDER_TTL) return hit;
+  const get = path => getJson(`${OPENDOTA}/players/${acc}${path ? '/' + path : ''}`, 16000);
+  const [pf, h, r, c] = await Promise.allSettled([get(''), get('heroes'), get('recentMatches'), get('counts')]);
+  const errs = [];
+  const take = (s, label) => { if (s.status === 'fulfilled') return s.value; errs.push(`${label}：${s.reason && s.reason.message || s.reason}`); return null; };
+  const prof = take(pf, '基础资料'), heroes = take(h, '擅长英雄'), recent = take(r, '近期比赛'), counts = take(c, '统计');
+  const d = {
+    at: Date.now(), accountId: acc, errs,
+    profile: prof ? { profile: pickKeys(prof.profile, ['personaname', 'avatarmedium', 'plus', 'profileurl']), rank_tier: prof.rank_tier, leaderboard_rank: prof.leaderboard_rank } : null,
+    heroes: Array.isArray(heroes) ? heroes.filter(x => x.games > 0).map(x => pickKeys(x, ['hero_id', 'games', 'win', 'last_played', 'with_games', 'with_win', 'against_games', 'against_win'])) : null,
+    recent: Array.isArray(recent) ? recent.map(x => pickKeys(x, ['match_id', 'hero_id', 'player_slot', 'radiant_win', 'kills', 'deaths', 'assists', 'gold_per_min', 'xp_per_min', 'last_hits', 'duration', 'game_mode', 'lobby_type', 'party_size', 'average_rank', 'start_time'])) : null,
+    counts: counts ? pickKeys(counts, ['lobby_type', 'game_mode', 'lane_role', 'region', 'patch', 'leaver_status', 'is_radiant']) : null,
+  };
+  if (d.profile || d.heroes || d.recent || d.counts) ladderCache.set(acc, d);
+  return d;
 }
 
 exports.main = async (event) => {
@@ -56,6 +105,12 @@ exports.main = async (event) => {
         matches: d.matches.slice(part * PAGE, (part + 1) * PAGE),
       };
     }
+    if (event.action === 'match') {
+      await readAll();
+      const m = (raw.matches || []).find(x => x.id === String(event.id));
+      return m ? { ok: true, match: m } : { error: '找不到这场比赛' };
+    }
+    if (event.action === 'ladder') return { ok: true, ...await ladder(String(event.pid || ''), !!event.force) };
     return { error: '未知操作：' + event.action };
   } catch (e) {
     return { error: e.message || String(e) };

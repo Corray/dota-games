@@ -7,7 +7,7 @@ const STORAGE_KEY = 'dota-records-v1';
 // ============ 计算核心（core.js，与小程序共用） ============
 const { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, LANE_EDGE, COMEBACK_GOLD, replayPid,
   FIGHT_GAP, FIGHT_MIN, teamfights, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP,
-  heroScore, playerScore, leagueOf } = DotaCore;
+  heroScore, playerScore, leagueOf, LOBBY_NAME, GAME_MODE_NAME, LANE_ROLE_NAME, LEAVER_NAME, REGION_NAME, PATCH_NAME, rankFromTier, fmtClock } = DotaCore;
 // 网页里这三个原来隐式读本机评分设置 / 当前选手表，包一层补默认参数，调用方（含 tournament / auction / captain）不用改
 const computeStats = (matches, so = loadScoreOpt()) => DotaCore.computeStats(matches, so);
 const replayStats = (matches, P = playerMap()) => DotaCore.replayStats(matches, P);
@@ -666,7 +666,6 @@ function openReplayAll() {
   $('#ra-auto').onchange = e => { localStorage.setItem(AUTO_REPLAY_KEY, e.target.checked ? '1' : '0'); toast(e.target.checked ? '已开启：保存 / 导入比赛后自动拉解析' : '已关闭自动解析'); };
 }
 $('#btn-replay-all').addEventListener('click', openReplayAll);
-const fmtClock = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 // 折线图（单轴）：series = [{ v: [], color }]，zero = 是否以 0 为中线并按正负分色（正 = 天辉领先）
 // v 里允许 null（该点无数据，折线在此断开——多人 Elo 走势里每人只从首场开始画）
 function lineChartSvg(id, series, { zero = false, yFmt = v => String(v), height = 150, pct = false } = {}) {
@@ -1148,13 +1147,7 @@ function showPlayerDetail(pid) {
 
 // ============ 天梯资料（OpenDota 选手接口：heroes / recentMatches / counts） ============
 // 字典均来自 OpenDota dotaconstants；未收录的编号原样显示
-const LOBBY_NAME = { 0: '普通匹配', 1: '练习赛', 2: '锦标赛', 3: '教程', 4: '合作人机', 5: '组排天梯', 6: '单排天梯', 7: '天梯', 8: '1v1 中路', 9: '战斗杯', 10: '本地人机', 11: '自定义', 12: '活动', 13: '人机组队', 14: '组排人机' };
-const GAME_MODE_NAME = { 0: '未知', 1: '全阵营选择', 2: '队长模式', 3: '随机征召', 4: '单一征召', 5: '全部随机', 6: '新手模式', 7: '外交', 8: '反向征召', 9: '贪婪', 10: '教程', 11: '中路对决', 12: '至少选择', 13: '新手组队', 14: '同英雄', 15: '自定义', 16: '队长征召', 17: '均衡征召', 18: '技能征召', 19: '活动', 20: '全随机死亡竞赛', 21: '1v1 中路', 22: '全英雄选择', 23: '加速模式', 24: '突变' };
-const LANE_ROLE_NAME = { 0: '未知 / 未解析', 1: '优势路', 2: '中路', 3: '劣势路', 4: '打野 / 游走' };
-const LEAVER_NAME = { 0: '正常完成', 1: '提前退出（安全）', 2: '断线过久', 3: '放弃', 4: 'AFK', 5: '从未连接', 6: '从未连接（超时）' };
-const REGION_NAME = { 1: '美西', 2: '美东', 3: '欧洲', 5: '新加坡（东南亚）', 6: '迪拜', 7: '澳大利亚', 8: '斯德哥尔摩', 9: '奥地利', 10: '巴西', 11: '南非', 12: '完美·电信上海', 13: '完美·联通', 14: '智利', 15: '秘鲁', 16: '印度', 17: '完美·电信广东', 18: '完美·电信浙江', 19: '日本', 20: '完美·电信武汉', 25: '完美·联通天津', 37: '台湾', 38: '阿根廷' };
 // OpenDota 的 patch 字段是内部编号（constants/patch 数组下标），这里只收 7.20 以后的
-const PATCH_NAME = { 39: '7.20', 40: '7.21', 41: '7.22', 42: '7.23', 43: '7.24', 44: '7.25', 45: '7.26', 46: '7.27', 47: '7.28', 48: '7.29', 49: '7.30', 50: '7.31', 51: '7.32', 52: '7.33', 53: '7.34', 54: '7.35', 55: '7.36', 56: '7.37', 57: '7.38', 58: '7.39', 59: '7.40', 60: '7.41' };
 const LADDER_TTL = 10 * 60 * 1000; // 同一账号 10 分钟内重开弹窗不再请求（OpenDota 匿名限额 60 次/分钟）
 const ladderCache = new Map();
 
@@ -1456,7 +1449,6 @@ function parseAccountId(v) {
   if (id > 76561197960265728) id -= 76561197960265728; // 64 位 SteamID → 32 位 account_id
   return id > 0 ? id : null;
 }
-const rankFromTier = tier => { const t = Math.floor(tier / 10); if (!t || t > 8) return null; return { rank: RANKS[t - 1], stars: t === 8 ? 0 : (tier % 10 || 1) }; }; // 冠绝一世无星级
 // ============ OpenDota 导入 ============
 let importDraft = null;
 const extractMatchId = v => { const m = String(v || '').match(/(\d{6,})/); return m ? m[1] : null; };

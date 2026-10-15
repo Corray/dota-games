@@ -32,3 +32,4 @@
 .team.won .tn { color: #e0a83a; }
 .pl { font-size: 24rpx; margin: 6rpx 0; }
 .pl.me { color: #e0a83a; font-weight: 600; }
+.chip.act { border-color: #4a3d20; color: #e0a83a; padding: 6rpx 18rpx; font-size: 24rpx; }

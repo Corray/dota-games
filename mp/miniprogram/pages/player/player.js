@@ -23,7 +23,7 @@ Page({
     const s = v.st.players[this.pid], sc = v.scores[this.pid], r = v.rs.players[this.pid];
     const scopeTxt = this.scoped && (f.from || f.to || f.league) ? `统计范围：${S.scopeTitle(v)}` : '全部比赛';
     const base = { ok: true, name: p.name, rank: p.rank + (p.stars ? ' ' + p.stars : ''), scopeTxt,
-      posTxt: (p.positions || []).map(i => C.POS_SHORT[i]).join(' ') || '-', heroTxt: (p.heroes || []).join('、') || '-' };
+      hasAcc: !!p.accountId, posTxt: (p.positions || []).map(i => C.POS_SHORT[i]).join(' ') || '-', heroTxt: (p.heroes || []).join('、') || '-' };
     if (!s) return this.setData({ ...base, none: true });
 
     const sp = n => Math.round(n * 100);
@@ -103,5 +103,7 @@ Page({
     this.setData({ open: id, detail: { id: m.id, date: m.date, dur: m.duration ? m.duration + ' 分' : '', score: Array.isArray(m.score) ? m.score.join(' : ') : '',
       league: S.leagueOf(m) || '', winner: m.winner === 'radiant' ? '天辉胜' : '夜魇胜', rad: side(m.radiant), dire: side(m.dire), rw: m.winner === 'radiant' } });
   },
+  openLadder() { wx.navigateTo({ url: `/pages/ladder/ladder?pid=${this.pid}` }); },
+  openMatch(e) { wx.navigateTo({ url: `/pages/match/match?id=${e.currentTarget.dataset.id}` }); },
   openPlayer(e) { const pid = e.currentTarget.dataset.pid; if (pid && pid !== this.pid) wx.navigateTo({ url: `/pages/player/player?pid=${pid}${this.scoped ? '&scope=stats' : ''}` }); },
 });

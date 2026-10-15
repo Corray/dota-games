@@ -3,7 +3,9 @@
     "pages/players/players",
     "pages/stats/stats",
     "pages/matches/matches",
-    "pages/player/player"
+    "pages/player/player",
+    "pages/match/match",
+    "pages/ladder/ladder"
   ],
   "window": {
     "navigationBarBackgroundColor": "#0e1115",

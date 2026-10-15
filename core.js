@@ -331,5 +331,15 @@ function buildReport({ title, st, ms, rows, P, data }) {
   return L.join('\n');
 }
 
-return { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, computeStats, LANE_EDGE, COMEBACK_GOLD, replayPid, replayStats, FIGHT_GAP, FIGHT_MIN, teamfights, computeBadges, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP, heroScore, playerScore, leagueOf, rankIdx, pname, pct, pctNum, statsRows, buildReport };
+// ============ OpenDota 字典 / 段位换算 / 时间格式（天梯资料、录像详情用） ============
+const LOBBY_NAME = { 0: '普通匹配', 1: '练习赛', 2: '锦标赛', 3: '教程', 4: '合作人机', 5: '组排天梯', 6: '单排天梯', 7: '天梯', 8: '1v1 中路', 9: '战斗杯', 10: '本地人机', 11: '自定义', 12: '活动', 13: '人机组队', 14: '组排人机' };
+const GAME_MODE_NAME = { 0: '未知', 1: '全阵营选择', 2: '队长模式', 3: '随机征召', 4: '单一征召', 5: '全部随机', 6: '新手模式', 7: '外交', 8: '反向征召', 9: '贪婪', 10: '教程', 11: '中路对决', 12: '至少选择', 13: '新手组队', 14: '同英雄', 15: '自定义', 16: '队长征召', 17: '均衡征召', 18: '技能征召', 19: '活动', 20: '全随机死亡竞赛', 21: '1v1 中路', 22: '全英雄选择', 23: '加速模式', 24: '突变' };
+const LANE_ROLE_NAME = { 0: '未知 / 未解析', 1: '优势路', 2: '中路', 3: '劣势路', 4: '打野 / 游走' };
+const LEAVER_NAME = { 0: '正常完成', 1: '提前退出（安全）', 2: '断线过久', 3: '放弃', 4: 'AFK', 5: '从未连接', 6: '从未连接（超时）' };
+const REGION_NAME = { 1: '美西', 2: '美东', 3: '欧洲', 5: '新加坡（东南亚）', 6: '迪拜', 7: '澳大利亚', 8: '斯德哥尔摩', 9: '奥地利', 10: '巴西', 11: '南非', 12: '完美·电信上海', 13: '完美·联通', 14: '智利', 15: '秘鲁', 16: '印度', 17: '完美·电信广东', 18: '完美·电信浙江', 19: '日本', 20: '完美·电信武汉', 25: '完美·联通天津', 37: '台湾', 38: '阿根廷' };
+const PATCH_NAME = { 39: '7.20', 40: '7.21', 41: '7.22', 42: '7.23', 43: '7.24', 44: '7.25', 45: '7.26', 46: '7.27', 47: '7.28', 48: '7.29', 49: '7.30', 50: '7.31', 51: '7.32', 52: '7.33', 53: '7.34', 54: '7.35', 55: '7.36', 56: '7.37', 57: '7.38', 58: '7.39', 59: '7.40', 60: '7.41' };
+const rankFromTier = tier => { const t = Math.floor(tier / 10); if (!t || t > 8) return null; return { rank: RANKS[t - 1], stars: t === 8 ? 0 : (tier % 10 || 1) }; }; // 冠绝一世无星级
+const fmtClock = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+
+return { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, computeStats, LANE_EDGE, COMEBACK_GOLD, replayPid, replayStats, FIGHT_GAP, FIGHT_MIN, teamfights, computeBadges, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP, heroScore, playerScore, leagueOf, rankIdx, pname, pct, pctNum, statsRows, buildReport, LOBBY_NAME, GAME_MODE_NAME, LANE_ROLE_NAME, LEAVER_NAME, REGION_NAME, PATCH_NAME, rankFromTier, fmtClock };
 });

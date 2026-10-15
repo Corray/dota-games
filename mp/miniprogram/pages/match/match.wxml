@@ -1,0 +1,95 @@
+<view class="wrap">
+  <view class="muted" wx:if="{{loading}}">加载中…</view>
+  <view class="err" wx:if="{{err}}">{{err}}</view>
+  <block wx:if="{{id}}">
+    <view class="card">
+      <view class="row between"><text class="b">比赛 {{id}}</text><text class="side {{wcls}}">{{winner}}</text></view>
+      <view class="muted">{{date}}<text wx:if="{{dur}}"> · {{dur}}</text><text wx:if="{{kills}}"> · 人头 {{kills}}</text><text wx:elif="{{score}}"> · 比分 {{score}}</text><text wx:if="{{league}}"> · 联赛 {{league}}</text></view>
+      <view class="muted" wx:if="{{note}}">{{note}}</view>
+    </view>
+
+    <view class="card">
+      <view class="teams">
+        <view class="team {{rw ? 'won' : ''}}"><view class="tn">天辉 {{rw ? '· 胜' : ''}}</view>
+          <view class="pl" wx:for="{{rad}}" wx:key="pid" data-pid="{{item.pid}}" bindtap="openPlayer"><text class="pos">{{item.pos}}</text>{{item.name}}<view class="muted ph">{{item.hero}} {{item.kda}}</view></view>
+        </view>
+        <view class="team {{rw ? '' : 'won'}}"><view class="tn">夜魇 {{rw ? '' : '· 胜'}}</view>
+          <view class="pl" wx:for="{{dire}}" wx:key="pid" data-pid="{{item.pid}}" bindtap="openPlayer"><text class="pos">{{item.pos}}</text>{{item.name}}<view class="muted ph">{{item.hero}} {{item.kda}}</view></view>
+        </view>
+      </view>
+    </view>
+
+    <view class="empty" wx:if="{{!loading && !hasReplay}}">这场还没有录像解析（网页「比赛」页点「详情解析」或「批量解析」）</view>
+
+    <block wx:if="{{hasReplay}}">
+      <view class="muted" style="margin-bottom:10rpx">数据来源：完美世界录像解析<text wx:if="{{saved}}">，保存于 {{saved}}</text></view>
+
+      <view class="card">
+        <view class="sec">阵容与分路 <text class="muted">号位来自录像解析</text></view>
+        <view class="teams">
+          <view class="team won" wx:for="{{roster}}" wx:key="side"><view class="tn">{{item.label}}</view>
+            <view class="pl" wx:for="{{item.list}}" wx:for-item="x" wx:key="h"><text class="pos">{{x.pos}}</text>{{x.who}}<view class="muted ph">{{x.hero}}</view></view>
+          </view>
+        </view>
+      </view>
+
+      <view class="card">
+        <view class="sec">经济差 <text class="muted">天辉 − 夜魇，横轴是分钟</text></view>
+        <canvas type="2d" id="gold" class="cv" bindtouchstart="onChartTap" bindtouchmove="onChartTap"></canvas>
+        <view class="sec">经验差</view>
+        <canvas type="2d" id="exp" class="cv" bindtouchstart="onChartTap" bindtouchmove="onChartTap"></canvas>
+        <block wx:if="{{hasWr}}"><view class="sec">天辉胜率走势</view>
+        <canvas type="2d" id="wr" class="cv sm" bindtouchstart="onChartTap" bindtouchmove="onChartTap"></canvas></block>
+        <view class="tipbar">{{tip}}</view>
+        <view class="more" bindtap="toggleTable">{{showTable ? '收起逐分钟数据' : '查看逐分钟数据'}}</view>
+        <block wx:if="{{showTable}}">
+          <view class="th"><text class="c1">分钟</text><text>经济差</text><text>经验差</text><text>天辉胜率</text></view>
+          <view class="tr" wx:for="{{minutes}}" wx:key="i"><text class="c1">{{item.i}}</text><text>{{item.g}}</text><text>{{item.x}}</text><text>{{item.wr}}</text></view>
+        </block>
+      </view>
+
+      <view class="card" wx:if="{{lanes.length}}">
+        <view class="sec">对线期 <text class="muted">约 10 分钟</text></view>
+        <block wx:for="{{lanes}}" wx:key="i">
+          <view class="lane">{{item.name}}</view>
+          <view class="tr" wx:for="{{item.rows}}" wx:for-item="r" wx:key="h">
+            <view class="c1"><text class="dot {{r.side}}"></text>{{r.who}} <text class="muted">{{r.hero}}</text></view>
+            <text class="n">Lv{{r.lvl}}</text><text class="n">{{r.lh}}</text><text class="n">{{r.nw}}</text><text class="n">{{r.kda}}</text>
+          </view>
+        </block>
+        <view class="muted sm">等级 · 正/反补 · 净资产 · K/D/A</view>
+      </view>
+
+      <view class="card" wx:if="{{res.length}}">
+        <view class="sec">资源投入</view>
+        <view class="th"><text class="c1">阵营</text><text>假眼</text><text>真眼</text><text>堆野</text><text>经验符</text><text>技能符</text><text>雾</text><text>粉</text><text>宝石</text></view>
+        <view class="tr" wx:for="{{res}}" wx:key="side"><text class="c1"><text class="side {{item.side}}">{{item.label}}</text></text><text wx:for="{{item.v}}" wx:for-item="x" wx:key="index">{{x}}</text></view>
+      </view>
+
+      <view class="card" wx:if="{{bp.length}}">
+        <view class="sec">BP 顺序 <text class="muted">✕ = 禁用</text></view>
+        <view class="row wrapr"><text wx:for="{{bp}}" wx:key="i" class="bpi {{item.side}} {{item.pick ? '' : 'ban'}}">{{item.i}}. {{item.name}}{{item.pick ? '' : ' ✕'}}</text></view>
+      </view>
+
+      <view class="card">
+        <view class="sec">团战 <text class="muted">{{fightSum}}</text></view>
+        <view class="fstrip">
+          <view wx:for="{{killDots}}" wx:key="i" class="kd {{item.side}}" style="left:{{item.left}}%"></view>
+          <view wx:for="{{fights}}" wx:key="i" class="fb {{item.winner || 'even'}}" style="left:{{item.left}}%;width:{{item.width}}%;height:{{item.h}}%"></view>
+        </view>
+        <view class="fr" wx:for="{{fights}}" wx:key="i">
+          <view class="row between"><text>#{{item.i}} {{item.t}}</text><text><text class="b">{{item.sc}}</text> <text class="side {{item.winner}}">{{item.wtxt}}</text> <text class="{{item.scls}}">{{item.swing}}</text></text></view>
+          <view class="row wrapr"><text class="muted sm">阵亡 </text><text wx:for="{{item.dead}}" wx:for-item="d" wx:key="j" class="dead {{d.side}}">{{d.who}}</text></view>
+        </view>
+      </view>
+
+      <view class="card">
+        <view class="sec">击杀时间线 <text class="muted">{{killList.length}} 次英雄击杀</text></view>
+        <view class="more" bindtap="toggleKills">{{showKills ? '收起' : '展开全部击杀'}}</view>
+        <block wx:if="{{showKills}}">
+          <view class="kr" wx:for="{{killList}}" wx:key="i"><text class="kt">{{item.t}}</text><text class="side {{item.ks}}">{{item.kw}}</text><text class="muted sm"> {{item.kh}}</text><text class="muted"> 击杀 </text><text class="side {{item.vs}}">{{item.vw}}</text><text class="muted sm"> {{item.vh}}</text></view>
+        </block>
+      </view>
+    </block>
+  </block>
+</view>

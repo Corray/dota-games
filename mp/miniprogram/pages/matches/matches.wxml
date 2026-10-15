@@ -8,7 +8,7 @@
   </view>
   <view class="muted" style="margin-bottom:12rpx">共 {{total}} 场</view>
 
-  <view class="card" wx:for="{{items}}" wx:key="id">
+  <view class="card" wx:for="{{items}}" wx:key="id" data-id="{{item.id}}" bindtap="openMatch">
     <view class="row between">
       <view><text class="side {{item.wcls}}">{{item.winner}}</text><text class="muted"> {{item.date}}<text wx:if="{{item.dur}}"> · {{item.dur}}</text><text wx:if="{{item.score}}"> · {{item.score}}</text></text></view>
       <text class="muted" wx:if="{{item.league}}">联赛 {{item.league}}</text>
@@ -29,7 +29,7 @@
         </view>
       </view>
     </view>
-    <view class="muted id">ID {{item.id}}</view>
+    <view class="row between"><text class="muted id">ID {{item.id}}</text><text class="muted id">{{item.replay ? '录像解析 ›' : '详情 ›'}}</text></view>
   </view>
   <view class="more" wx:if="{{items.length < total}}">上滑加载更多（{{items.length}} / {{total}}）</view>
   <view class="empty" wx:if="{{!loading && !err && !total}}">没有符合条件的比赛</view>

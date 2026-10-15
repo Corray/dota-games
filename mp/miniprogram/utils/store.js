@@ -149,8 +149,19 @@ function rankTable(v, minG, sorted) {
 }
 
 const matchById = id => mem && mem.matches.find(m => m.id === id);
+// 单场完整记录（含完整录像解析），同版本内缓存
+const fullMatch = new Map();
+async function match(id) {
+  const k = (mem ? mem.version : 0) + '|' + id;
+  if (fullMatch.has(k)) return fullMatch.get(k);
+  const r = await call('match', { id });
+  fullMatch.set(k, r.match);
+  return r.match;
+}
+// 天梯资料（云函数代查 OpenDota，云函数里缓存 10 分钟）
+const ladder = (pid, force = false) => call('ladder', { pid, force });
 const fmtTime = s => { if (!s) return ''; const d = new Date(s); const z = n => String(n).padStart(2, '0'); return `${d.getMonth() + 1}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; };
 const pname = pid => (mem && mem.P.get(pid) || {}).name || '(已删除)';
 
 module.exports = { load, view, leagues, leagueOf, get data() { return mem; }, core, fmtTime, filter, setFilter, ALL,
-  scoreOpt, saveScoreOpt, resetScoreOpt, statRows, report, rankTable, scopeTitle, matchById, pname };
+  scoreOpt, saveScoreOpt, resetScoreOpt, statRows, report, rankTable, scopeTitle, matchById, pname, match, ladder };

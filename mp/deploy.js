@@ -74,7 +74,7 @@ async function func(envId) {
   console.log(`上传云函数代码到 ${env.envId}（云端安装依赖）…`);
   await ci.cloud.uploadFunction({ project, env: env.envId, name: FN, path: path.join(ROOT, 'cloudfunctions', FN), remoteNpmInstall: true });
   await waitActive(env.envId, region, codeSecret);
-  await cloudAPI.scfUpdateFunctionInfo({ namespace: env.envId, region, functionName: FN, memorySize: 256, timeout: 20, environment: { variables } }, topts());
+  await cloudAPI.scfUpdateFunctionInfo({ namespace: env.envId, region, functionName: FN, memorySize: 256, timeout: 40, environment: { variables } }, topts());
   await waitActive(env.envId, region, codeSecret);
   console.log('云函数已部署，环境变量：' + variables.map(v => v.key).join(', '));
   try {

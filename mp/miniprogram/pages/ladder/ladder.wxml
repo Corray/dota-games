@@ -1,0 +1,62 @@
+<view class="wrap">
+  <view class="muted" wx:if="{{loading}}">正在向 OpenDota 拉取基础资料 / 擅长英雄 / 近期比赛 / 统计…（首次可能要十几秒）</view>
+  <view class="err" wx:if="{{err}}">{{err}}</view>
+  <block wx:if="{{acc && !err}}">
+    <view class="card row">
+      <image wx:if="{{avatar}}" class="avatar" src="{{avatar}}" mode="aspectFill" />
+      <view class="grow">
+        <view class="row"><text class="pname">{{name}}</text><text class="rank">{{rank}}</text></view>
+        <view class="muted">游戏昵称 <text class="b">{{persona}}</text><text class="plus" wx:if="{{plus}}">PLUS</text></view>
+        <view class="muted">天梯 <text class="accent b">{{ladderRank}}</text> <text class="b" wx:if="{{board}}">{{board}}</text></view>
+        <view class="muted">Steam ID {{acc}} · 数据来源 OpenDota · {{when}} · 下拉刷新</view>
+      </view>
+    </view>
+    <view class="err" wx:if="{{errs.length}}">⚠ 部分接口失败：<text wx:for="{{errs}}" wx:key="*this">{{item}}；</text></view>
+    <view class="empty" wx:if="{{empty}}">OpenDota 上没有这个账号的比赛数据。可能是资料未公开（游戏内「设置 → 社交 → 公开比赛数据」），或 OpenDota 尚未收录。</view>
+
+    <block wx:if="{{ctiles.length}}">
+      <view class="sec">统计 <text class="muted">OpenDota 收录的全部比赛</text></view>
+      <view class="tiles"><view class="tile" wx:for="{{ctiles}}" wx:key="k"><view class="k">{{item.k}}</view><view class="v">{{item.v}}</view><view class="s">{{item.s}}</view></view></view>
+      <view class="card" wx:for="{{dists}}" wx:key="key">
+        <view class="row between" data-k="{{item.key}}" bindtap="toggleDist"><text class="b">{{item.title}}</text><text class="muted">{{openDist === item.key ? '收起' : item.rows[0].k + ' ' + item.rows[0].g + ' 场 ▾'}}</text></view>
+        <block wx:if="{{openDist === item.key}}">
+          <view class="tr" wx:for="{{item.rows}}" wx:for-item="r" wx:key="k"><text class="c1">{{r.k}}</text><text>{{r.g}}</text><text>{{r.wr}}</text></view>
+        </block>
+      </view>
+    </block>
+
+    <block wx:if="{{heroTotal}}">
+      <view class="sec">擅长英雄 <text class="muted">共 {{heroTotal}} 个，★ = 名单里登记的擅长英雄</text></view>
+      <scroll-view scroll-x class="secs" enable-flex>
+        <view wx:for="{{hsorts}}" wx:key="k" class="chip sm {{hsort === item.k ? 'on' : ''}}" data-k="{{item.k}}" bindtap="onHSort">{{item.t}}<text wx:if="{{hsort === item.k}}">{{hdir < 0 ? '↓' : '↑'}}</text></view>
+      </scroll-view>
+      <view class="card">
+        <view class="th"><text class="c1">英雄</text><text>场次</text><text>胜率</text><text class="w2">队友选时</text><text class="w2">对阵时</text></view>
+        <view class="tr {{item.mine ? 'mine' : ''}}" wx:for="{{heroRows}}" wx:key="id">
+          <view class="c1"><text wx:if="{{item.mine}}" class="accent">★ </text>{{item.n}}<view class="muted sm">{{item.last}}</view></view>
+          <text>{{item.g}}</text><text class="b">{{item.wr}}</text><text class="w2">{{item.with}}</text><text class="w2">{{item.against}}</text>
+        </view>
+        <view class="more" wx:if="{{heroTotal > 15}}" bindtap="toggleAllHeroes">{{allHeroes ? '只看前 15 个' : '显示全部 ' + heroTotal + ' 个英雄'}}</view>
+      </view>
+    </block>
+
+    <block wx:if="{{recent}}">
+      <view class="sec">近期比赛 <text class="muted">最近 {{recent.length}} 场 · 点一场看详情（已记录的内战）</text></view>
+      <view class="tiles" wx:if="{{rtiles.length}}"><view class="tile half" wx:for="{{rtiles}}" wx:key="k"><view class="k">{{item.k}}</view><view class="v">{{item.v}}</view><view class="s">{{item.s}}</view></view></view>
+      <view class="strip"><view wx:for="{{strip}}" wx:key="index" class="sq {{item}}"></view></view>
+      <view class="card rm" wx:for="{{recent}}" wx:key="id" data-id="{{item.id}}" bindtap="openMatch">
+        <view class="row between">
+          <view class="row"><text class="{{item.won ? 'win' : 'lose'}} b">{{item.won ? '胜' : '负'}}</text><text class="side {{item.scls}}">{{item.side}}</text><text class="b"> {{item.hero}}</text></view>
+          <text class="muted">{{item.ago}}</text>
+        </view>
+        <view class="grid">
+          <view><text class="muted">K/D/A </text>{{item.kda}}</view><view><text class="muted">GPM/XPM </text>{{item.gx}}</view>
+          <view><text class="muted">正补 </text>{{item.lh}}</view><view><text class="muted">时长 </text>{{item.dur}}</view>
+          <view><text class="muted">对局段位 </text>{{item.tier}}</view><view><text class="muted">{{item.id}}</text><text class="accent" wx:if="{{item.known}}"> 已记录</text></view>
+        </view>
+        <view class="muted">{{item.mode}}</view>
+      </view>
+      <view class="empty" wx:if="{{!recent.length}}">没有近期比赛</view>
+    </block>
+  </block>
+</view>

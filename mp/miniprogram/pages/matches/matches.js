@@ -30,7 +30,7 @@ Page({
       .sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
     const side = (arr, won) => ({ won, list: (arr || []).map(s => ({ pid: s.pid, name: name(s.pid), hero: s.hero || '', pos: s.pos || '', kda: s.kda ? s.kda.join('/') : '' })) });
     const items = list.slice(0, this.data.shown).map(m => ({
-      id: m.id, date: m.date, league: S.leagueOf(m) || '', dur: m.duration ? m.duration + ' 分' : '',
+      id: m.id, date: m.date, league: S.leagueOf(m) || '', replay: !!(m.replay && m.replay.heroes), dur: m.duration ? m.duration + ' 分' : '',
       score: Array.isArray(m.score) ? m.score.join(' : ') : '', winner: m.winner === 'radiant' ? '天辉胜' : '夜魇胜', wcls: m.winner,
       rad: side(m.radiant, m.winner === 'radiant'), dire: side(m.dire, m.winner === 'dire'),
     }));
@@ -39,5 +39,6 @@ Page({
 
   onLeague(e) { this.setData({ leagueIdx: Number(e.detail.value), shown: STEP }); this.render(); },
   onSearch(e) { this.setData({ q: e.detail.value, shown: STEP }); clearTimeout(this._t); this._t = setTimeout(() => this.render(), 250); },
+  openMatch(e) { wx.navigateTo({ url: `/pages/match/match?id=${e.currentTarget.dataset.id}` }); },
   openPlayer(e) { wx.navigateTo({ url: `/pages/player/player?pid=${e.currentTarget.dataset.pid}` }); },
 });

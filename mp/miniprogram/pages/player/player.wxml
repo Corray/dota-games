@@ -7,7 +7,7 @@
         <view wx:if="{{!none}}"><text class="sv">{{score}}</text><text class="muted" wx:if="{{thin}}">*</text><view class="muted" style="text-align:right">评分</view></view>
       </view>
       <view class="muted">擅长位置 {{posTxt}} ｜ 擅长英雄 {{heroTxt}}</view>
-      <view class="muted">{{scopeTxt}}</view>
+      <view class="row between"><text class="muted">{{scopeTxt}}</text><view class="chip act" wx:if="{{hasAcc}}" bindtap="openLadder">天梯资料 ›</view></view>
       <view class="bd" wx:for="{{badges}}" wx:key="t"><text>{{item.t}}</text> <text class="muted">{{item.d}}</text></view>
     </view>
     <view class="empty" wx:if="{{none}}">这个范围内还没有比赛记录</view>
@@ -82,6 +82,7 @@
           <view class="md" wx:if="{{open === item.id && detail}}">
             <view class="muted" wx:if="{{detail.gone}}">这场比赛的记录已被删除</view>
             <block wx:else>
+              <view class="row between"><text class="accent" data-id="{{detail.id}}" bindtap="openMatch">比赛详情 / 录像解析 ›</text></view>
               <view class="muted">ID {{detail.id}}<text wx:if="{{detail.league}}"> · 联赛 {{detail.league}}</text><text wx:if="{{detail.dur}}"> · {{detail.dur}}</text><text wx:if="{{detail.score}}"> · {{detail.score}}</text> · {{detail.winner}}</view>
               <view class="teams">
                 <view class="team {{detail.rw ? 'won' : ''}}"><view class="tn">天辉</view>
