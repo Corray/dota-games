@@ -1,0 +1,10 @@
+.pr { padding: 18rpx 6rpx 14rpx; border-bottom: 1px solid #1f252e; }
+.name { font-size: 30rpx; font-weight: 600; max-width: 330rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bdg { margin-left: 8rpx; font-size: 24rpx; }
+.sc .v { font-size: 32rpx; font-weight: 600; color: #e0a83a; }
+.wrapr { flex-wrap: wrap; }
+.pos { font-size: 20rpx; padding: 2rpx 10rpx; border-radius: 6rpx; background: #2a2416; color: #e0a83a; margin: 4rpx 8rpx 4rpx 0; }
+.hero { font-size: 20rpx; padding: 2rpx 10rpx; border-radius: 6rpx; background: #1d222a; color: #c3c9d4; margin: 4rpx 8rpx 4rpx 0; }
+.gw { white-space: nowrap; margin-left: 12rpx; }
+.track { height: 6rpx; background: #1d222a; border-radius: 3rpx; margin-top: 10rpx; overflow: hidden; }
+.fill { height: 100%; background: #e0a83a; opacity: .7; }

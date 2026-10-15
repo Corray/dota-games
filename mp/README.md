@@ -1,6 +1,6 @@
 # Dota 内战记录 · 微信小程序
 
-第一期只读：选手排行、比赛列表、选手详情，按联赛筛选。数据和网页版是同一份（百度云 MySQL 的 `dota_state` 表），
+第一期只读，对齐网页的「选手名单」「统计」「比赛」：选手名单（搜索 / 排序）、统计（日期 + 联赛 + 最少场次筛选、概览、排行、称号、Elo 走势、预测回看、对线节奏、英雄、搭档、战报复制、评分权重）、比赛列表、选手详情。数据和网页版是同一份（百度云 MySQL 的 `dota_state` 表），
 统计用仓库根目录的 `core.js` 计算，和网页口径一致。
 
 ```
@@ -9,7 +9,8 @@ mp/
 ├── miniprogram/               小程序代码
 │   ├── utils/core.js          ⚠ 自动生成：根目录 core.js 的副本（node mp/sync-core.js）
 │   ├── utils/store.js         数据层：云函数取数 + 本机缓存（按版本号判断要不要重拉）
-│   └── pages/rank | matches | player
+│   ├── utils/chart.js          canvas 折线图（Elo 走势）
+│   └── pages/players | stats | matches | player
 ├── cloudfunctions/api/        云函数：读 MySQL，分页返回；连接信息走云函数环境变量
 ├── deploy.js                  部署脚本（miniprogram-ci）
 └── sync-core.js               同步计算核心
@@ -36,6 +37,8 @@ node deploy.js upload 1.0.0 "说明"   # 上传体验版，再到后台「版本
 
 ## 已知取舍
 
-- 评分用默认权重（段位 40 / Elo 30 / KDA 20 / 英雄 10）。网页上改过的权重只存在那台浏览器，小程序看不到。
+- 评分权重和网页一样存在本机：小程序「统计 → 评分权重」里改，只影响这台手机。
 - 联赛只显示 ID，网页上给联赛起的名字只存在那台浏览器。
+- 战报正文、排行行数据在根目录 core.js（buildReport / statsRows），网页和小程序出的战报逐字一致。
+- 没做：网页的天梯资料（OpenDota）、下载 CSV / 打印、选手备注和 Steam ID（云函数不下发）。
 - 写入（录比赛）放第二期，打算用微信身份白名单鉴权，不再用编辑口令。

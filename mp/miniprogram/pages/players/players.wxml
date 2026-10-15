@@ -1,0 +1,30 @@
+<view class="wrap">
+  <view class="err" wx:if="{{err}}">{{err}}（下拉重试）</view>
+  <view class="muted" wx:if="{{offline}}">{{offline}}</view>
+  <view class="bar">
+    <input class="input grow" placeholder="搜索昵称 / 段位 / 英雄" value="{{q}}" bindinput="onSearch" confirm-type="search" />
+  </view>
+  <view class="bar">
+    <view wx:for="{{sorts}}" wx:key="k" class="chip {{sort === item.k ? 'on' : ''}}" data-k="{{item.k}}" bindtap="onSort">{{item.t}}<text wx:if="{{sort === item.k}}">{{dir < 0 ? ' ↓' : ' ↑'}}</text></view>
+  </view>
+  <view class="muted" style="margin-bottom:8rpx">{{total === all ? '共 ' + all + ' 人' : total + ' / ' + all + ' 人'}} · 评分带 * 表示样本不足，KDA / 英雄两项向中间收缩</view>
+
+  <view class="pr" wx:for="{{rows}}" wx:key="pid" data-pid="{{item.pid}}" bindtap="open">
+    <view class="row between">
+      <view class="row grow"><text class="name">{{item.name}}</text><text class="rank">{{item.rank}}</text><text class="bdg">{{item.badges}}</text></view>
+      <view class="sc"><text class="v">{{item.score}}</text><text class="muted" wx:if="{{item.thin}}">*</text></view>
+    </view>
+    <view class="row between" style="margin-top:6rpx">
+      <view class="row grow wrapr">
+        <text class="pos" wx:for="{{item.pos}}" wx:for-item="x" wx:key="*this">{{x}}</text>
+        <text class="hero" wx:for="{{item.heroes}}" wx:for-item="h" wx:key="*this">{{h}}</text>
+        <text class="muted" wx:if="{{!item.pos.length && !item.heroes.length}}">未填位置 / 英雄</text>
+      </view>
+      <text class="muted gw">{{item.g}} 场 · {{item.wr}}</text>
+    </view>
+    <view class="track"><view class="fill" style="width:{{item.bar}}%"></view></view>
+  </view>
+  <view class="more" wx:if="{{rows.length < total}}">上滑加载更多（{{rows.length}} / {{total}}）</view>
+  <view class="empty" wx:if="{{!loading && !err && !total}}">没有匹配的选手</view>
+  <view class="muted" style="text-align:center;margin-top:20rpx">{{updated}} · 下拉刷新</view>
+</view>

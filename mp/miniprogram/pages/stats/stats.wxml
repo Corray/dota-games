@@ -1,0 +1,154 @@
+<view class="wrap">
+  <view class="err" wx:if="{{err}}">{{err}}（下拉重试）</view>
+  <view class="muted" wx:if="{{offline}}">{{offline}}</view>
+
+  <!-- 筛选 -->
+  <view class="bar">
+    <picker mode="date" value="{{from}}" bindchange="onFrom"><view class="chip {{from ? 'on' : ''}}">从 {{from || '最早'}}</view></picker>
+    <picker mode="date" value="{{to}}" bindchange="onTo"><view class="chip {{to ? 'on' : ''}}">到 {{to || '最新'}}</view></picker>
+    <view class="chip" wx:if="{{from || to}}" bindtap="clearDates">清除日期</view>
+  </view>
+  <view class="bar">
+    <picker range="{{leagueOpts}}" value="{{leagueIdx}}" bindchange="onLeague"><view class="chip {{leagueIdx ? 'on' : ''}}">{{leagueOpts[leagueIdx] || '全部联赛'}} ▾</view></picker>
+    <view class="row chip">最少场次 <input class="mini" type="number" value="{{minG}}" bindblur="onMin" bindconfirm="onMin" /></view>
+  </view>
+  <view class="bar">
+    <view class="chip act" bindtap="copyReport">生成战报（复制）</view>
+    <view class="chip act" bindtap="copyTable">复制排行表</view>
+    <view class="chip {{showW ? 'on' : ''}}" bindtap="toggleW">评分权重</view>
+  </view>
+
+  <!-- 评分权重 -->
+  <view class="card" wx:if="{{showW}}">
+    <view class="sec">评分权重 <text class="muted">只存在这台手机，按比例归一，不必凑 100</text></view>
+    <view class="wrow"><text>段位</text><input type="number" data-k="wRank" value="{{w.wRank}}" bindblur="onW" bindconfirm="onW" /></view>
+    <view class="wrow"><text>对手加权（Elo）</text><input type="number" data-k="wElo" value="{{w.wElo}}" bindblur="onW" bindconfirm="onW" /></view>
+    <view class="wrow"><text>KDA</text><input type="number" data-k="wKda" value="{{w.wKda}}" bindblur="onW" bindconfirm="onW" /></view>
+    <view class="wrow"><text>英雄</text><input type="number" data-k="wHero" value="{{w.wHero}}" bindblur="onW" bindconfirm="onW" /></view>
+    <view class="wrow"><text>英雄口径</text><picker range="{{heroModes}}" range-key="t" value="{{heroModeIdx}}" bindchange="onHeroMode"><view class="accent">{{heroModes[heroModeIdx].t}} ▾</view></picker></view>
+    <view class="wrow"><text>比分差修正</text><switch checked="{{w.mov !== false}}" bindchange="onMov" color="#e0a83a" /></view>
+    <view class="wrow"><text>可信场次</text><input type="number" data-k="trust" value="{{w.trust}}" bindblur="onW" bindconfirm="onW" /></view>
+    <view class="row between" style="margin-top:12rpx"><text class="muted">权重和 {{wsum}}</text><view class="chip" bindtap="resetW">重置默认</view></view>
+    <view class="muted" style="margin-top:8rpx">比分差修正：击杀差越大 Elo 步长越大（0 分差 ×0.7，40+ 分差 ×1.3）。可信场次：打到这个场次时 KDA / 英雄两项只信一半，其余向中间收缩。</view>
+  </view>
+
+  <!-- 概览 -->
+  <view class="tiles">
+    <view class="tile" wx:for="{{tiles}}" wx:key="k" data-pid="{{item.pid}}" bindtap="open">
+      <view class="k">{{item.k}}</view><view class="v ell">{{item.v}}</view><view class="s">{{item.s}}</view>
+    </view>
+  </view>
+
+  <!-- 分区 -->
+  <scroll-view scroll-x class="secs" enable-flex>
+    <view wx:for="{{secs}}" wx:key="k" class="chip {{sec === item.k ? 'on' : ''}}" data-k="{{item.k}}" bindtap="onSec">{{item.t}}</view>
+  </scroll-view>
+
+  <!-- 选手排行 -->
+  <block wx:if="{{sec === 'rank'}}">
+    <scroll-view scroll-x class="secs" enable-flex>
+      <view wx:for="{{rsorts}}" wx:key="k" class="chip sm {{rsort === item.k ? 'on' : ''}}" data-k="{{item.k}}" bindtap="onRSort">{{item.t}}<text wx:if="{{rsort === item.k}}">{{rdir < 0 ? '↓' : '↑'}}</text></view>
+    </scroll-view>
+    <view class="muted" style="margin:8rpx 0">{{rtotal}} 人 · 点昵称看详情 · 评分带 * 表示样本不足</view>
+    <view class="card rk" wx:for="{{rows}}" wx:key="pid" data-pid="{{item.pid}}" bindtap="open">
+      <view class="row between">
+        <view class="row grow"><text class="no">{{item.no}}</text><text class="name">{{item.name}}</text><text class="rank">{{item.rank}}</text><text class="bdg">{{item.badges}}</text></view>
+        <view><text class="sv">{{item.score}}</text><text class="muted" wx:if="{{item.thin}}">*</text></view>
+      </view>
+      <view class="grid">
+        <view><text class="muted">战绩 </text>{{item.g}} 场 <text class="win">{{item.w}}</text>/<text class="lose">{{item.l}}</text></view>
+        <view><text class="muted">胜率 </text><text class="b">{{item.wr}}</text></view>
+        <view><text class="muted">天辉 </text>{{item.rad}}</view>
+        <view><text class="muted">夜魇 </text>{{item.dire}}</view>
+        <view><text class="muted">KDA </text><text class="b">{{item.kda}}</text> <text class="muted">{{item.kdaStr}}</text></view>
+        <view><text class="muted">连胜/负 </text><text class="{{item.scls}}">{{item.streak}}</text></view>
+      </view>
+      <view class="muted ell">位置 {{item.pos}} ｜ 英雄 {{item.hero}}</view>
+      <view class="track"><view class="fill" style="width:{{item.wrBar}}%"></view></view>
+    </view>
+    <view class="more" wx:if="{{rows.length < rtotal}}">上滑加载更多（{{rows.length}} / {{rtotal}}）</view>
+  </block>
+
+  <!-- 称号 -->
+  <block wx:if="{{sec === 'badge'}}">
+    <view class="muted" style="margin-bottom:8rpx">每个称号只给当前最强的人，并列都给；一血 / 翻盘只看有录像解析的比赛</view>
+    <view class="card" wx:for="{{badgeList}}" wx:key="name">
+      <view class="b">{{item.icon}} {{item.name}}</view>
+      <view class="row wrapr"><text class="who accent" wx:for="{{item.who}}" wx:for-item="x" wx:key="pid" data-pid="{{x.pid}}" catchtap="open">{{x.name}}</text></view>
+      <view class="muted">{{item.detail}}</view>
+    </view>
+    <view class="empty" wx:if="{{!badgeList.length}}">场次还不够，称号都空缺着</view>
+  </block>
+
+  <!-- Elo 走势 -->
+  <block wx:if="{{sec === 'elo'}}">
+    <view class="card">
+      <view class="muted" style="margin-bottom:8rpx">出场最多的 8 人，横轴是比赛先后。所有人从 1500 起步，赢强队加得多、输弱队扣得多</view>
+      <canvas type="2d" id="elo" class="cv" bindtouchstart="onEloTap" bindtouchmove="onEloTap"></canvas>
+      <view class="muted tip">{{eloTip}}</view>
+      <view class="row wrapr" style="margin-top:8rpx">
+        <view class="lg" wx:for="{{eloLegend}}" wx:key="pid" data-pid="{{item.pid}}" bindtap="open"><view class="dot" style="background:{{item.color}}"></view>{{item.name}} <text class="b">{{item.elo}}</text></view>
+      </view>
+    </view>
+  </block>
+
+  <!-- 预测回看 -->
+  <block wx:if="{{sec === 'pred'}}">
+    <view class="muted" style="margin-bottom:8rpx">每场开打前用当时的 Elo 推算胜率（不偷看结果）；爆冷 = 被看低的一方赢了</view>
+    <view class="tiles">
+      <view class="tile half" wx:for="{{pred}}" wx:key="k"><view class="k">{{item.k}}</view><view class="v">{{item.v}}</view><view class="s">{{item.s}}</view></view>
+    </view>
+    <view class="sec">爆冷榜</view>
+    <view class="card" wx:for="{{upsets}}" wx:key="id">
+      <view class="row between"><text class="muted">{{item.date}} · {{item.id}}</text><text class="side {{item.wcls}}">{{item.winner}}</text></view>
+      <view>赛前 天辉 {{item.pa}}% · 夜魇 {{item.pb}}% · 爆冷 <text class="accent b">{{item.surprise}}%</text></view>
+      <view class="muted ell">天辉：{{item.rad}}</view>
+      <view class="muted ell">夜魇：{{item.dire}}</view>
+    </view>
+    <view class="empty" wx:if="{{!upsets.length}}">还没有爆冷</view>
+  </block>
+
+  <!-- 对线与节奏 -->
+  <block wx:if="{{sec === 'lane'}}">
+    <view class="muted" style="margin-bottom:8rpx">{{laneInfo}}。对线 = 10 分钟本路双方净资产相比，领先 300 算赢；击杀参与 = (击杀+助攻)÷本方总击杀；团战 = 20 秒内连续 ≥3 杀</view>
+    <view class="card" wx:for="{{laneRows}}" wx:key="pid" data-pid="{{item.pid}}" bindtap="open">
+      <view class="row between"><text class="name">{{item.name}}</text><text class="muted">解析 {{item.g}} 场</text></view>
+      <view class="grid">
+        <view><text class="muted">对线胜/负/平 </text>{{item.lane}}</view>
+        <view><text class="muted">10 分经济领先 </text>{{item.gold}}</view>
+        <view><text class="muted">10 分正/反补 </text>{{item.lh}}</view>
+        <view><text class="muted">10 分净资产 </text>{{item.nw}}</view>
+        <view><text class="muted">击杀参与 </text>{{item.kp}}</view>
+        <view><text class="muted">团战胜率 </text>{{item.fight}}</view>
+        <view><text class="muted">一血 </text>{{item.fb}}</view>
+        <view><text class="muted">翻盘 </text>{{item.cb}}</view>
+      </view>
+    </view>
+    <view class="empty" wx:if="{{!laneRows.length}}">没有已解析的比赛</view>
+  </block>
+
+  <!-- 英雄 -->
+  <block wx:if="{{sec === 'hero'}}">
+    <view class="muted" style="margin-bottom:8rpx">共 {{heroTotal}} 个英雄</view>
+    <view class="hrow" wx:for="{{heroes}}" wx:key="hero">
+      <view class="row between"><text class="b">{{item.hero}}</text><text class="muted">{{item.g}} 场 · {{item.w}} 胜 · <text class="b">{{item.wr}}</text></text></view>
+      <view class="row wrapr"><text class="who" wx:for="{{item.users}}" wx:for-item="u" wx:key="pid" data-pid="{{u.pid}}" catchtap="open">{{u.name}}<text class="muted">×{{u.c}}</text></text></view>
+    </view>
+    <view class="more" wx:if="{{heroes.length < heroTotal}}">上滑加载更多（{{heroes.length}} / {{heroTotal}}）</view>
+  </block>
+
+  <!-- 搭档 -->
+  <block wx:if="{{sec === 'duo'}}">
+    <view class="sec">最佳双人组合 <text class="muted">同队 ≥2 场，胜率从高到低</text></view>
+    <view class="hrow" wx:for="{{best}}" wx:key="id">
+      <view class="row between"><text><text class="accent" data-pid="{{item.a}}" catchtap="open">{{item.an}}</text> + <text class="accent" data-pid="{{item.b}}" catchtap="open">{{item.bn}}</text></text><text>{{item.g}} 场 <text class="win">{{item.w}}</text>/<text class="lose">{{item.l}}</text> · <text class="b">{{item.wr}}</text></text></view>
+    </view>
+    <view class="sec" style="margin-top:24rpx">最差双人组合 <text class="muted">同队 ≥2 场，胜率从低到高</text></view>
+    <view class="hrow" wx:for="{{worst}}" wx:key="id">
+      <view class="row between"><text><text class="accent" data-pid="{{item.a}}" catchtap="open">{{item.an}}</text> + <text class="accent" data-pid="{{item.b}}" catchtap="open">{{item.bn}}</text></text><text>{{item.g}} 场 <text class="win">{{item.w}}</text>/<text class="lose">{{item.l}}</text> · <text class="b">{{item.wr}}</text></text></view>
+    </view>
+    <view class="empty" wx:if="{{!best.length}}">同队 ≥2 场的组合才会显示</view>
+  </block>
+
+  <view class="muted" style="text-align:center;margin-top:20rpx">{{updated}} · 下拉刷新</view>
+</view>

@@ -1030,25 +1030,7 @@ function buildReport() {
   const dates = ms.map(m => m.date).sort();
   const range = from || to ? `${from || dates[0] || '?'} ~ ${to || dates[dates.length - 1] || '?'}` : (dates.length ? `${dates[0]} ~ ${dates[dates.length - 1]}` : '无');
   const lgSel = $('#sf-league').value;
-  const L = [`# Dota 2 内战战报（${range}${lgSel ? ' · ' + leagueLabel(lgSel) : ''}）`, '', `- 共 **${st.total}** 场，天辉 ${st.radiantWins} 胜 / 夜魇 ${st.total - st.radiantWins} 胜${st.avgDuration ? `，平均 ${Math.round(st.avgDuration)} 分钟` : ''}，${rows.length} 人出场`];
-  if (!st.total) return L.join('\n');
-  const byScore = [...data].sort((a, b) => b.score - a.score);
-  const mvp = byScore.find(r => r.g >= 3) || byScore[0];
-  if (mvp) L.push(`- **MVP**：${mvp.name}（评分 ${mvp.score.toFixed(1)}，${mvp.g} 场 ${pct(mvp.w, mvp.g)}）`);
-  const byElo = [...rows].sort((a, b) => b.elo - a.elo);
-  if (byElo.length >= 2) L.push(`- **Elo 涨最多**：${pname(P, byElo[0].pid)} ${byElo[0].elo - ELO_BASE >= 0 ? '+' : ''}${Math.round(byElo[0].elo - ELO_BASE)}　**跌最多**：${pname(P, byElo[byElo.length - 1].pid)} ${Math.round(byElo[byElo.length - 1].elo - ELO_BASE)}（本期内从 1500 起算）`);
-  const badges = computeBadges(st, ms); const byName = new Map();
-  for (const [pid, list] of Object.entries(badges)) for (const b of list) { const o = byName.get(b.name) || { b, who: [] }; o.who.push(pid); byName.set(b.name, o); }
-  if (byName.size) { L.push('', '## 称号'); for (const { b, who } of byName.values()) L.push(`- ${b.icon} **${b.name}**：${who.map(pid => pname(P, pid)).join('、')}（${badges[who[0]].find(x => x.name === b.name).detail}）`); }
-  const pr = predictionReport(st.preds);
-  if (pr.decisive) { L.push('', '## 预测回看', `- 赛前 Elo 预测准确率 ${pct(pr.hit, pr.decisive)}（有倾向的 ${pr.decisive} 场），Brier ${pr.brier.toFixed(3)}`); const u = pr.upsets[0]; if (u) { const m = ms.find(x => x.id === u.id); L.push(`- 最大爆冷：${u.date} ${u.id}，赛前只给 ${Math.round((1 - u.surprise) * 100)}% 的${u.winner === 'radiant' ? '天辉' : '夜魇'}赢了${m ? `（${(m[u.winner] || []).map(s => pname(P, s.pid)).join('、')}）` : ''}`); } }
-  L.push('', '## 排行（按评分，前 10）', '| # | 选手 | 评分 | 场次 | 胜率 | KDA | 连胜/负 |', '|---|---|---|---|---|---|---|');
-  byScore.slice(0, 10).forEach((r, i) => L.push(`| ${i + 1} | ${r.name} | ${r.score.toFixed(1)} | ${r.g} | ${pct(r.w, r.g)} | ${r.kda >= 0 ? r.kda.toFixed(2) : '-'} | ${r.streak > 0 ? r.streak + '连胜' : r.streak < 0 ? -r.streak + '连败' : '-'} |`));
-  const duos = Object.values(st.duos).filter(d => d.g >= 2 && P.has(d.a) && P.has(d.b));
-  if (duos.length) { const best = [...duos].sort((a, b) => b.w / b.g - a.w / a.g || b.g - a.g)[0], worst = [...duos].sort((a, b) => a.w / a.g - b.w / b.g || b.g - a.g)[0]; L.push('', '## 搭档', `- 最佳：${pname(P, best.a)} + ${pname(P, best.b)}，${best.w}/${best.g}`, `- 最差：${pname(P, worst.a)} + ${pname(P, worst.b)}，${worst.w}/${worst.g}`); }
-  const heroes = Object.values(st.heroes).sort((a, b) => b.g - a.g).slice(0, 5);
-  if (heroes.length) L.push('', '## 热门英雄', ...heroes.map(h => `- ${h.hero}：${h.g} 场 ${pct(h.w, h.g)}`));
-  return L.join('\n');
+  return DotaCore.buildReport({ title: range + (lgSel ? ' · ' + leagueLabel(lgSel) : ''), st, ms, rows, P, data });   // 正文在 core.js，与小程序同一份
 }
 
 // ---- Elo 走势（出场最多的 8 人）：横轴 = 筛选范围内的比赛先后（seq），没上场的比赛沿用上一场的值，首场之前不画 ----

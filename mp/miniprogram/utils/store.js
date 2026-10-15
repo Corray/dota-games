@@ -73,6 +73,27 @@ async function load({ force = false } = {}) {
 const leagueOf = core.leagueOf;
 const leagueMatch = (m, sel) => !sel || (sel === 'none' ? !leagueOf(m) : String(leagueOf(m)) === sel);
 
+// ============ 统计筛选（统计页、选手详情共用；与网页「统计」页的 从 / 到 / 联赛 / 最少场次 同口径） ============
+const filter = { from: '', to: '', league: '', minG: 1 };
+const setFilter = f => { Object.assign(filter, f); };
+const filterKey = f => [f.from, f.to, f.league].join('|');
+const ALL = { from: '', to: '', league: '' };
+
+// ============ 评分权重：存在本机（和网页一样各设备各自一份），默认值同网页 ============
+const SO_KEY = 'dota-score-weights';
+let soCache = null;
+function scoreOpt() {
+  if (soCache) return soCache;
+  try { soCache = { ...core.SCORE_DEF, ...(wx.getStorageSync(SO_KEY) || {}) }; } catch (e) { soCache = { ...core.SCORE_DEF }; }
+  return soCache;
+}
+function saveScoreOpt(o) {
+  soCache = { ...core.SCORE_DEF, ...o };
+  try { wx.setStorageSync(SO_KEY, soCache); } catch (e) { }
+  views.clear();
+}
+const resetScoreOpt = () => { try { wx.removeStorageSync(SO_KEY); } catch (e) { } soCache = null; views.clear(); };
+
 /** 联赛下拉选项：按场次多到少，另加「无联赛 ID」 */
 function leagues() {
   if (!mem) return [{ value: '', label: '全部联赛' }];
@@ -84,21 +105,52 @@ function leagues() {
     .concat(none && ids.length ? [{ value: 'none', label: `无联赛 ID · ${none} 场` }] : []);
 }
 
-/** 某个联赛筛选下的全部统计（同版本数据内缓存） */
-function view(league = '') {
+/** 某个范围（日期 + 联赛）下的全部统计，同版本数据 + 同权重内缓存。f 省略 = 全部比赛（选手名单页用） */
+function view(f = ALL) {
   if (!mem) return null;
-  if (views.has(league)) return views.get(league);
-  const ms = mem.matches.filter(m => leagueMatch(m, league));
-  const st = core.computeStats(ms, core.SCORE_DEF);
+  const so = scoreOpt();
+  const key = filterKey(f) + '|' + JSON.stringify(so);
+  if (views.has(key)) return views.get(key);
+  const ms = mem.matches.filter(m => (!f.from || m.date >= f.from) && (!f.to || m.date <= f.to) && leagueMatch(m, f.league));
+  const st = core.computeStats(ms, so);
   const badges = core.computeBadges(st, ms, mem.P);
   const rs = core.replayStats(ms, mem.P);
   const scores = {};
-  for (const p of mem.players) scores[p.id] = core.playerScore(st.players[p.id], p, core.SCORE_DEF);
-  const v = { league, ms, st, badges, rs, scores };
-  views.set(league, v);
+  for (const p of mem.players) scores[p.id] = core.playerScore(st.players[p.id], p, so);
+  const v = { f: { ...f }, ms, st, badges, rs, scores, so };
+  views.set(key, v);
   return v;
 }
 
-const fmtTime = s => { if (!s) return ''; const d = new Date(s); const z = n => String(n).padStart(2, '0'); return `${d.getMonth() + 1}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; };
+/** 当前统计筛选下的排行行（与网页统计表同字段） */
+function statRows(v, minG) {
+  const P = mem.P;
+  const rows = Object.values(v.st.players).filter(s => s.g >= minG && P.has(s.pid));
+  return { rows, data: core.statsRows(rows, P, v.so) };
+}
 
-module.exports = { load, view, leagues, leagueOf, get data() { return mem; }, core, fmtTime };
+/** 战报标题：与网页一致（从 ~ 到 · 联赛） */
+function scopeTitle(v) {
+  const dates = v.ms.map(m => m.date).sort();
+  const range = v.f.from || v.f.to ? `${v.f.from || dates[0] || '?'} ~ ${v.f.to || dates[dates.length - 1] || '?'}` : (dates.length ? `${dates[0]} ~ ${dates[dates.length - 1]}` : '无');
+  const lg = v.f.league ? (v.f.league === 'none' ? '无联赛 ID' : `联赛 ${v.f.league}`) : '';
+  return range + (lg ? ' · ' + lg : '');
+}
+function report(v, minG) {
+  const { rows, data } = statRows(v, minG);
+  return core.buildReport({ title: scopeTitle(v), st: v.st, ms: v.ms, rows, P: mem.P, data });
+}
+function rankTable(v, minG, sorted) {
+  const pct = core.pct;
+  const head = ['选手', '段位', '评分', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
+  const P = mem.P;
+  const lines = sorted.map(r => [r.name, `${P.get(r.pid).rank}${P.get(r.pid).stars || ''}`, r.score.toFixed(1), r.g, r.w, r.l, pct(r.w, r.g), r.rg ? `${pct(r.rw, r.rg)}(${r.rg})` : '-', r.dg ? `${pct(r.dw, r.dg)}(${r.dg})` : '-', r.kda >= 0 ? `${r.kda.toFixed(2)} (${r.kdaStr})` : '-', r.pos || '-', r.hero || '-', r.streak > 0 ? `${r.streak}连胜` : r.streak < 0 ? `${-r.streak}连败` : '-']);
+  return ['| ' + head.join(' | ') + ' |', '|' + head.map(() => '---').join('|') + '|', ...lines.map(r => '| ' + r.join(' | ') + ' |')].join('\n');
+}
+
+const matchById = id => mem && mem.matches.find(m => m.id === id);
+const fmtTime = s => { if (!s) return ''; const d = new Date(s); const z = n => String(n).padStart(2, '0'); return `${d.getMonth() + 1}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; };
+const pname = pid => (mem && mem.P.get(pid) || {}).name || '(已删除)';
+
+module.exports = { load, view, leagues, leagueOf, get data() { return mem; }, core, fmtTime, filter, setFilter, ALL,
+  scoreOpt, saveScoreOpt, resetScoreOpt, statRows, report, rankTable, scopeTitle, matchById, pname };

@@ -294,5 +294,43 @@ function playerScore(st, p, opt) {
 
 const leagueOf = m => m.leagueId != null ? (Number(m.leagueId) || 0) : (Number(m.replay?.leagueId) || 0);   // 手填 / 清空过的优先于录像里带的
 
-return { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, computeStats, LANE_EDGE, COMEBACK_GOLD, replayPid, replayStats, FIGHT_GAP, FIGHT_MIN, teamfights, computeBadges, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP, heroScore, playerScore, leagueOf, rankIdx, pname, pct, pctNum };
+// ============ 统计页排行行数据（网页统计表、战报、小程序共用） ============
+// rows = computeStats 的选手对象（已按最少场次 / 在名单内过滤）
+function statsRows(rows, P, so) {
+  return rows.map(s => {
+    const p = P.get(s.pid);
+    const sc = playerScore(s, p, so);
+    return { pid: s.pid, name: p.name, rank: rankIdx(p), g: s.g, w: s.w, l: s.g - s.w, wr: pctNum(s.w, s.g), rwr: pctNum(s.rw, s.rg), dwr: pctNum(s.dw, s.dg),
+      rg: s.rg, rw: s.rw, dg: s.dg, dw: s.dw, streak: s.streak, kda: s.kdaG ? (s.k + s.a) / Math.max(1, s.d) : -1, kdaStr: s.kdaG ? `${(s.k / s.kdaG).toFixed(1)}/${(s.d / s.kdaG).toFixed(1)}/${(s.a / s.kdaG).toFixed(1)}` : '',
+      pos: Object.entries(s.pos).sort((a, b) => b[1].g - a[1].g).slice(0, 2).map(([k, v]) => `${POS_SHORT[k]} ${v.g}场`).join('，'),
+      hero: Object.entries(s.heroes).sort((a, b) => b[1].g - a[1].g).slice(0, 3).map(([k, v]) => `${k} ${v.w}/${v.g}`).join('，'),
+      sc, score: sc.score };
+  });
+}
+
+// ============ 一键战报（Markdown） ============
+// title = 「2026-06-11 ~ 2026-10-14 · 联赛 19638」这类范围说明；rows 同上，data = statsRows(rows, …)
+function buildReport({ title, st, ms, rows, P, data }) {
+  const L = [`# Dota 2 内战战报（${title}）`, '', `- 共 **${st.total}** 场，天辉 ${st.radiantWins} 胜 / 夜魇 ${st.total - st.radiantWins} 胜${st.avgDuration ? `，平均 ${Math.round(st.avgDuration)} 分钟` : ''}，${rows.length} 人出场`];
+  if (!st.total) return L.join('\n');
+  const byScore = [...data].sort((a, b) => b.score - a.score);
+  const mvp = byScore.find(r => r.g >= 3) || byScore[0];
+  if (mvp) L.push(`- **MVP**：${mvp.name}（评分 ${mvp.score.toFixed(1)}，${mvp.g} 场 ${pct(mvp.w, mvp.g)}）`);
+  const byElo = [...rows].sort((a, b) => b.elo - a.elo);
+  if (byElo.length >= 2) L.push(`- **Elo 涨最多**：${pname(P, byElo[0].pid)} ${byElo[0].elo - ELO_BASE >= 0 ? '+' : ''}${Math.round(byElo[0].elo - ELO_BASE)}　**跌最多**：${pname(P, byElo[byElo.length - 1].pid)} ${Math.round(byElo[byElo.length - 1].elo - ELO_BASE)}（本期内从 1500 起算）`);
+  const badges = computeBadges(st, ms, P); const byName = new Map();
+  for (const [pid, list] of Object.entries(badges)) for (const b of list) { const o = byName.get(b.name) || { b, who: [] }; o.who.push(pid); byName.set(b.name, o); }
+  if (byName.size) { L.push('', '## 称号'); for (const { b, who } of byName.values()) L.push(`- ${b.icon} **${b.name}**：${who.map(pid => pname(P, pid)).join('、')}（${badges[who[0]].find(x => x.name === b.name).detail}）`); }
+  const pr = predictionReport(st.preds);
+  if (pr.decisive) { L.push('', '## 预测回看', `- 赛前 Elo 预测准确率 ${pct(pr.hit, pr.decisive)}（有倾向的 ${pr.decisive} 场），Brier ${pr.brier.toFixed(3)}`); const u = pr.upsets[0]; if (u) { const m = ms.find(x => x.id === u.id); L.push(`- 最大爆冷：${u.date} ${u.id}，赛前只给 ${Math.round((1 - u.surprise) * 100)}% 的${u.winner === 'radiant' ? '天辉' : '夜魇'}赢了${m ? `（${(m[u.winner] || []).map(s => pname(P, s.pid)).join('、')}）` : ''}`); } }
+  L.push('', '## 排行（按评分，前 10）', '| # | 选手 | 评分 | 场次 | 胜率 | KDA | 连胜/负 |', '|---|---|---|---|---|---|---|');
+  byScore.slice(0, 10).forEach((r, i) => L.push(`| ${i + 1} | ${r.name} | ${r.score.toFixed(1)} | ${r.g} | ${pct(r.w, r.g)} | ${r.kda >= 0 ? r.kda.toFixed(2) : '-'} | ${r.streak > 0 ? r.streak + '连胜' : r.streak < 0 ? -r.streak + '连败' : '-'} |`));
+  const duos = Object.values(st.duos).filter(d => d.g >= 2 && P.has(d.a) && P.has(d.b));
+  if (duos.length) { const best = [...duos].sort((a, b) => b.w / b.g - a.w / a.g || b.g - a.g)[0], worst = [...duos].sort((a, b) => a.w / a.g - b.w / b.g || b.g - a.g)[0]; L.push('', '## 搭档', `- 最佳：${pname(P, best.a)} + ${pname(P, best.b)}，${best.w}/${best.g}`, `- 最差：${pname(P, worst.a)} + ${pname(P, worst.b)}，${worst.w}/${worst.g}`); }
+  const heroes = Object.values(st.heroes).sort((a, b) => b.g - a.g).slice(0, 5);
+  if (heroes.length) L.push('', '## 热门英雄', ...heroes.map(h => `- ${h.hero}：${h.g} 场 ${pct(h.w, h.g)}`));
+  return L.join('\n');
+}
+
+return { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, computeStats, LANE_EDGE, COMEBACK_GOLD, replayPid, replayStats, FIGHT_GAP, FIGHT_MIN, teamfights, computeBadges, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP, heroScore, playerScore, leagueOf, rankIdx, pname, pct, pctNum, statsRows, buildReport };
 });

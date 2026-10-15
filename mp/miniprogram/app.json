@@ -1,5 +1,10 @@
 {
-  "pages": ["pages/rank/rank", "pages/matches/matches", "pages/player/player"],
+  "pages": [
+    "pages/players/players",
+    "pages/stats/stats",
+    "pages/matches/matches",
+    "pages/player/player"
+  ],
   "window": {
     "navigationBarBackgroundColor": "#0e1115",
     "navigationBarTextStyle": "white",
@@ -13,8 +18,18 @@
     "backgroundColor": "#161a20",
     "borderStyle": "black",
     "list": [
-      { "pagePath": "pages/rank/rank", "text": "排行" },
-      { "pagePath": "pages/matches/matches", "text": "比赛" }
+      {
+        "pagePath": "pages/players/players",
+        "text": "选手"
+      },
+      {
+        "pagePath": "pages/stats/stats",
+        "text": "统计"
+      },
+      {
+        "pagePath": "pages/matches/matches",
+        "text": "比赛"
+      }
     ]
   },
   "style": "v2",
