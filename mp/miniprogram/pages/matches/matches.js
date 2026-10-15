@@ -39,6 +39,7 @@ Page({
 
   onLeague(e) { this.setData({ leagueIdx: Number(e.detail.value), shown: STEP }); this.render(); },
   onSearch(e) { this.setData({ q: e.detail.value, shown: STEP }); clearTimeout(this._t); this._t = setTimeout(() => this.render(), 250); },
+  openImport() { wx.navigateTo({ url: '/pages/import/import' }); },
   openMatch(e) { wx.navigateTo({ url: `/pages/match/match?id=${e.currentTarget.dataset.id}` }); },
   openPlayer(e) { wx.navigateTo({ url: `/pages/player/player?pid=${e.currentTarget.dataset.pid}` }); },
 });

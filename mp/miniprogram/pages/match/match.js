@@ -31,8 +31,7 @@ Page({
     if (rp) {
       const byHero = new Map(rp.heroes.map(h => [h.h, h]));
       const who = h => { const info = byHero.get(h); if (!info) return heroName(h);
-        const side = m[info.r ? 'radiant' : 'dire'] || [];
-        const p = (info.acc && side.find(s => (P.get(s.pid) || {}).accountId === info.acc)) || side.find(s => s.hero === heroName(h));
+        const p = C.replaySidePlayer(m, info, P);
         return p ? S.pname(p.pid) : (info.name || '未知'); };
       const sideOf = h => (byHero.get(h) || {}).r ? 'radiant' : 'dire';
       this._sideOf = sideOf;

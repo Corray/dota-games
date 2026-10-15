@@ -3,10 +3,15 @@
 // node mp/sync-core.js --check  只检查是否一致（不一致退出码 1）
 const fs = require('fs'), path = require('path');
 const src = path.join(__dirname, '..', 'core.js');
-const dst = path.join(__dirname, 'miniprogram', 'utils', 'core.js');
+// 两个副本：小程序页面用、云函数 api 用（导入比赛时解析 / 匹配选手）
+const dsts = [path.join(__dirname, 'miniprogram', 'utils', 'core.js'), path.join(__dirname, 'cloudfunctions', 'api', 'core.js')];
 const banner = '// ⚠ 自动生成，请改仓库根目录的 core.js，再运行 node mp/sync-core.js\n';
 const want = banner + fs.readFileSync(src, 'utf8');
-const have = fs.existsSync(dst) ? fs.readFileSync(dst, 'utf8') : '';
-if (process.argv.includes('--check')) { if (have !== want) { console.error('mp/miniprogram/utils/core.js 与根目录 core.js 不一致，运行 node mp/sync-core.js'); process.exit(1); } console.log('core.js 一致'); }
-else if (have !== want) { fs.writeFileSync(dst, want); console.log('已同步 core.js →', path.relative(process.cwd(), dst)); }
-else console.log('core.js 已是最新');
+let bad = 0;
+for (const dst of dsts) {
+  const have = fs.existsSync(dst) ? fs.readFileSync(dst, 'utf8') : '';
+  const rel = path.relative(process.cwd(), dst);
+  if (process.argv.includes('--check')) { if (have !== want) { console.error(rel + ' 与根目录 core.js 不一致，运行 node mp/sync-core.js'); bad++; } }
+  else if (have !== want) { fs.writeFileSync(dst, want); console.log('已同步 core.js →', rel); }
+}
+if (process.argv.includes('--check')) { if (bad) process.exit(1); console.log('core.js 一致'); }

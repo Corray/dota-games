@@ -5,7 +5,8 @@
     "pages/matches/matches",
     "pages/player/player",
     "pages/match/match",
-    "pages/ladder/ladder"
+    "pages/ladder/ladder",
+    "pages/import/import"
   ],
   "window": {
     "navigationBarBackgroundColor": "#0e1115",

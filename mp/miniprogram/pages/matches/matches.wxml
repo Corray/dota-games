@@ -6,7 +6,7 @@
     </picker>
     <input class="input grow" placeholder="搜选手 / 英雄 / 比赛 ID / 联赛号" value="{{q}}" bindinput="onSearch" confirm-type="search" />
   </view>
-  <view class="muted" style="margin-bottom:12rpx">共 {{total}} 场</view>
+  <view class="row between" style="margin-bottom:12rpx"><text class="muted">共 {{total}} 场</text><view class="chip on" bindtap="openImport">＋ 导入比赛</view></view>
 
   <view class="card" wx:for="{{items}}" wx:key="id" data-id="{{item.id}}" bindtap="openMatch">
     <view class="row between">

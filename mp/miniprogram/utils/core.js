@@ -129,11 +129,16 @@ function computeStats(matches, so = SCORE_DEF) {
    领先 ≥ LANE_EDGE 算赢、落后 ≥ LANE_EDGE 算输，中间算平。击杀参与率 = (击杀 + 助攻) ÷ 本方总击杀，助攻取比赛记录里的 KDA */
 const LANE_EDGE = 300;
 const COMEBACK_GOLD = 5000;   // 赢的一方曾落后这么多经济才算翻盘
+// 录像英雄 ↔ 选手账号：2026-10 之前存的录像 acc 有精度误差（≤8，见 parseReplayJson），允许 16 以内的偏差
+const accNear = (a, b) => !!a && !!b && Math.abs(a - b) <= 16;
+function replaySidePlayer(m, info, P) {
+  const side = m[info.r ? 'radiant' : 'dire'] || [];
+  return (info.acc && (side.find(s => P.get(s.pid)?.accountId === info.acc) || side.find(s => accNear(P.get(s.pid)?.accountId, info.acc))))
+    || side.find(s => s.hero === (HERO_BY_ID[info.h] || '')) || null;
+}
 function replayPid(m, rp, h, P) {
   const info = rp.heroes.find(x => x.h === h); if (!info) return null;
-  const side = m[info.r ? 'radiant' : 'dire'] || [];
-  const p = (info.acc && side.find(s => P.get(s.pid)?.accountId === info.acc)) || side.find(s => s.hero === (HERO_BY_ID[h] || ''));
-  return p?.pid || null;
+  return replaySidePlayer(m, info, P)?.pid || null;
 }
 function replayStats(matches, P) {
   const ps = {};
@@ -332,6 +337,114 @@ function buildReport({ title, st, ms, rows, P, data }) {
   return L.join('\n');
 }
 
+// ============ 比赛导入（网页「查询比赛 / 联赛导入 / 发现内战」与小程序云函数共用） ============
+// 录像里的 Steam64 → 32 位账号 ID。BigInt 只在调用时用到（网页 / 云函数），不写成字面量，免得小程序编译器不认
+const steam32 = s => typeof BigInt === 'function' ? Number(BigInt(String(s)) - BigInt('76561197960265728')) : null;
+// 完美世界录像接口的 steamId 是超出 2^53 的裸数字，JSON.parse 会丢精度（差几个数，按 Steam ID 对不上选手）。
+// 解析前先把它变成字符串，再交给 compactReplay 精确换算
+const parseReplayJson = text => JSON.parse(String(text).replace(/"steamId"\s*:\s*(\d{15,})/g, '"steamId":"$1"'));
+// 按分路 + GPM 推测 1-5 号位：中路→2；优势路 GPM 高者→1、其余→5；劣势路 GPM 高者→3、其余→4；野区/游走→4。冲突或缺失时按 GPM 顺序补空位
+function guessPositions(team) {
+  const byGpm = [...team].sort((a, b) => (b.gpm || 0) - (a.gpm || 0));
+  const want = new Map();
+  if (team.every(p => p.position >= 1 && p.position <= 5) && new Set(team.map(p => p.position)).size === team.length) {
+    team.forEach(p => p.pos = p.position); return team;
+  }
+  if (team.every(p => p.laneRole)) {
+    const grp = r => byGpm.filter(p => p.laneRole === r && !p.isRoaming);
+    grp(2).forEach((p, i) => want.set(p, i === 0 ? 2 : 0));
+    grp(1).forEach((p, i) => want.set(p, i === 0 ? 1 : 5));
+    grp(3).forEach((p, i) => want.set(p, i === 0 ? 3 : 4));
+    team.filter(p => p.laneRole === 4 || p.isRoaming).forEach(p => want.set(p, 4));
+  }
+  const used = new Set();
+  for (const p of byGpm) { const pos = want.get(p) || 0; if (pos && !used.has(pos)) { p.pos = pos; used.add(pos); } else p.pos = 0; }
+  const free = [1, 2, 3, 4, 5].filter(x => !used.has(x));
+  for (const p of byGpm) if (!p.pos) p.pos = free.shift() || 1;
+  return team;
+}
+
+function parseOpenDotaMatch(m) {
+  const d = new Date((m.start_time || Date.now() / 1000) * 1000);
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const mk = p => {
+    const hero = HERO_BY_ID[p.hero_id] || p.hero_name_zh || (p.hero_id ? `英雄#${p.hero_id}` : '');
+    const side = (typeof p.isRadiant === 'boolean' ? p.isRadiant : p.player_slot < 128) ? '天辉' : '夜魇';
+    return {
+    accountId: p.account_id || null, anon: !p.account_id,
+    name: (p.personaname || '').trim() || (p.account_id ? `玩家${p.account_id}` : `匿名·${side}·${hero || (p.player_slot % 128) + 1}`),
+    hidden: !!p.hidden_name,
+    heroId: p.hero_id, hero,
+    kda: [p.kills || 0, p.deaths || 0, p.assists || 0], gpm: p.gold_per_min || 0,
+    laneRole: p.lane_role || 0, isRoaming: !!p.is_roaming, rankTier: p.rank_tier || 0, pos: 0, position: p.position || 0,
+  }; };
+  const isRad = p => (typeof p.isRadiant === 'boolean' ? p.isRadiant : p.player_slot < 128);
+  return {
+    id: String(m.match_id), date, duration: m.duration ? Math.round(m.duration / 60) : null, leagueId: Number(m.leagueid || m.league_id) || 0,
+    winner: m.radiant_win ? 'radiant' : 'dire', score: [m.radiant_score ?? '?', m.dire_score ?? '?'],
+    radiant: guessPositions(m.players.filter(isRad).map(mk)), dire: guessPositions(m.players.filter(p => !isRad(p)).map(mk)),
+  };
+}
+
+
+function pwesportsMatch(body) {
+  if (body.code !== 0) throw new Error(body.message || '返回 code ' + body.code);
+  const m = (body.result && body.result.find ? body.result.find(g => g.group === 'match') : null)?.data;
+  if (!m) throw Object.assign(new Error('尚未收录这场比赛（刚结束的比赛通常要等几分钟）'), { notFound: true });
+  return {
+    match_id: m.match_id, start_time: m.start_time, duration: m.duration, radiant_win: !!m.radiant_win,
+    radiant_score: m.radiant_score, dire_score: m.dire_score, source: 'pwesports', leagueid: Number(m.leagueid) || 0,
+    players: (m.players || []).map(p => {
+      const hidden = !p.nickname || p.nickname === '匿名';
+      return { account_id: p.account_id || null, personaname: hidden ? '' : p.nickname, hidden_name: hidden, player_slot: p.player_slot,
+        hero_id: p.hero_id, hero_name_zh: p.hero_name_zh, kills: p.kills, deaths: p.deaths, assists: p.assists, gold_per_min: p.gold_per_min, rank_tier: p.rank || 0 };
+    }),
+  };
+}
+
+// 压缩成小对象存进 match.replay（每场约 5KB；原始返回 120KB+，localStorage 存不下）
+function compactReplay(r) {
+  const heroes = (r.heroInfos || []).map(h => ({ h: h.heroId, line: h.line || 0, r: !!h.radiant, name: h.userName || '', acc: h.steamId ? steam32(h.steamId) : null }));
+  if (!heroes.length) return null;
+  const pack = x => ({ h: x.heroId, lvl: x.level, k: x.kills, d: x.deaths, a: x.assists, lh: x.lastHits, dn: x.denies, nw: x.netWorth, xp: x.experience });
+  const rg = r.radiantGraphList || [], dg = r.direGraphList || [];
+  const n = Math.min(rg.length, dg.length);
+  return {
+    at: Date.now(), leagueId: r.leagueId || 0, gameMode: r.gameMode || 0, heroes,
+    lanes: (r.lineAnalyses || []).map(l => ({ type: l.type, goldType: l.lineGoldType, rad: (l.radiantHeroes || []).map(pack), dire: (l.direHeroes || []).map(pack) })),
+    gold: Array.from({ length: n }, (_, i) => rg[i].gold - dg[i].gold), exp: Array.from({ length: n }, (_, i) => rg[i].exp - dg[i].exp),
+    kills: (r.logEvents || []).filter(e => e.type === 4).map(e => [e.time, e.sourceId, e.targetId]),
+    wr: (r.graphWinRate || []).map(x => Math.round(x * 100)),
+    res: { radiant: r.radiantResources || null, dire: r.direResources || null },
+    bp: (r.picksBans || []).sort((a, b) => a.order - b.order).map(x => [x.heroId, x.pick ? 1 : 0, x.team]),
+  };
+}
+
+function importParsed(state, parsed, { leagueId, autoNew, source, uid }) {
+  let created = 0;
+  const label = source || `联赛 ${leagueId} 导入`;
+  const side = rows => rows.map(r => {
+    let p = r.accountId ? state.players.find(x => x.accountId === r.accountId) : null;
+    if (!p && !r.hidden && !r.anon) { const n = r.name.toLowerCase(); p = state.players.find(x => !x.accountId && x.name.toLowerCase() === n); if (p && r.accountId) p.accountId = r.accountId; }
+    if (!p) {
+      if (!autoNew) return null;
+      const rk = rankFromTier(r.rankTier);
+      let name = r.name, k = 2; while (state.players.some(x => x.name === name)) name = `${r.name}(${k++})`;
+      p = { id: uid(), createdAt: Date.now(), name, rank: rk ? rk.rank : '传奇', stars: rk ? rk.stars : 3, positions: [r.pos], heroes: r.hero ? [r.hero] : [], note: (r.anon || r.hidden) ? `${label}，昵称未公开，请改成真实昵称` : label, accountId: r.accountId };
+      state.players.push(p); created++;
+    }
+    const o = { pid: p.id, pos: r.pos, hero: r.hero }; if (r.kda) o.kda = r.kda; return o;
+  }).filter(Boolean);
+  const radiant = side(parsed.radiant), dire = side(parsed.dire);
+  if (!radiant.length || !dire.length) throw new Error('两队都没有可识别的选手（未勾选自动新建）');
+  const match = { id: parsed.id, date: parsed.date, duration: parsed.duration, note: `${label} · 比分 ${parsed.score.join(':')}`, radiant, dire, winner: parsed.winner, createdAt: Date.now() };
+  if (leagueId || parsed.leagueId) match.leagueId = Number(leagueId || parsed.leagueId);
+  if (parsed.score.every(x => Number.isFinite(Number(x)))) match.score = parsed.score.map(Number);
+  const i = state.matches.findIndex(m => m.id === match.id);
+  if (i >= 0) state.matches[i] = { ...match, createdAt: state.matches[i].createdAt, ...(state.matches[i].replay ? { replay: state.matches[i].replay } : {}) }; else state.matches.push(match);
+  return { created, match };
+}
+
 // ============ OpenDota 字典 / 段位换算 / 时间格式（天梯资料、录像详情用） ============
 const LOBBY_NAME = { 0: '普通匹配', 1: '练习赛', 2: '锦标赛', 3: '教程', 4: '合作人机', 5: '组排天梯', 6: '单排天梯', 7: '天梯', 8: '1v1 中路', 9: '战斗杯', 10: '本地人机', 11: '自定义', 12: '活动', 13: '人机组队', 14: '组排人机' };
 const GAME_MODE_NAME = { 0: '未知', 1: '全阵营选择', 2: '队长模式', 3: '随机征召', 4: '单一征召', 5: '全部随机', 6: '新手模式', 7: '外交', 8: '反向征召', 9: '贪婪', 10: '教程', 11: '中路对决', 12: '至少选择', 13: '新手组队', 14: '同英雄', 15: '自定义', 16: '队长征召', 17: '均衡征召', 18: '技能征召', 19: '活动', 20: '全随机死亡竞赛', 21: '1v1 中路', 22: '全英雄选择', 23: '加速模式', 24: '突变' };
@@ -342,5 +455,5 @@ const PATCH_NAME = { 39: '7.20', 40: '7.21', 41: '7.22', 42: '7.23', 43: '7.24',
 const rankFromTier = tier => { const t = Math.floor(tier / 10); if (!t || t > 8) return null; return { rank: RANKS[t - 1], stars: t === 8 ? 0 : (tier % 10 || 1) }; }; // 冠绝一世无星级
 const fmtClock = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 
-return { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, computeStats, LANE_EDGE, COMEBACK_GOLD, replayPid, replayStats, FIGHT_GAP, FIGHT_MIN, teamfights, computeBadges, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP, heroScore, playerScore, leagueOf, rankIdx, pname, pct, pctNum, statsRows, buildReport, LOBBY_NAME, GAME_MODE_NAME, LANE_ROLE_NAME, LEAVER_NAME, REGION_NAME, PATCH_NAME, rankFromTier, fmtClock };
+return { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, computeStats, LANE_EDGE, COMEBACK_GOLD, replayPid, replayStats, FIGHT_GAP, FIGHT_MIN, teamfights, computeBadges, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP, heroScore, playerScore, leagueOf, rankIdx, pname, pct, pctNum, statsRows, buildReport, LOBBY_NAME, GAME_MODE_NAME, LANE_ROLE_NAME, LEAVER_NAME, REGION_NAME, PATCH_NAME, rankFromTier, fmtClock, guessPositions, parseOpenDotaMatch, pwesportsMatch, compactReplay, importParsed, steam32, parseReplayJson, replaySidePlayer, accNear };
 });

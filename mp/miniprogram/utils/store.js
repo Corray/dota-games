@@ -160,8 +160,15 @@ async function match(id) {
 }
 // 天梯资料（云函数代查 OpenDota，云函数里缓存 10 分钟）
 const ladder = (pid, force = false) => call('ladder', { pid, force });
+// 写权限 / 导入（云函数按微信身份鉴权）
+const me = () => call('me');
+const bind = token => call('bind', { token });
+const previewIds = (ids, opts) => call('preview', { ids, ...opts });
+const importIds = (ids, opts) => call('import', { ids, ...opts });
+// 从粘贴的文字里抽比赛 ID（支持链接、逗号 / 空格 / 换行分隔），去重
+const extractIds = text => [...new Set((String(text).match(/\d{6,}/g) || []))];
 const fmtTime = s => { if (!s) return ''; const d = new Date(s); const z = n => String(n).padStart(2, '0'); return `${d.getMonth() + 1}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; };
 const pname = pid => (mem && mem.P.get(pid) || {}).name || '(已删除)';
 
 module.exports = { load, view, leagues, leagueOf, get data() { return mem; }, core, fmtTime, filter, setFilter, ALL,
-  scoreOpt, saveScoreOpt, resetScoreOpt, statRows, report, rankTable, scopeTitle, matchById, pname, match, ladder };
+  scoreOpt, saveScoreOpt, resetScoreOpt, statRows, report, rankTable, scopeTitle, matchById, pname, match, ladder, me, bind, previewIds, importIds, extractIds };

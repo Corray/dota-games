@@ -59,7 +59,8 @@ async function func(envId) {
   const region = env.functions[0].region;
   const codeSecret = await capi.get3rdCloudCodeSecret(project);
   const vars = readEnvFile();
-  const variables = ['MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_PASSWORD', 'MYSQL_DATABASE'].filter(k => vars[k]).map(k => ({ key: k, value: vars[k] }));
+  // EDIT_TOKEN：小程序里绑定写权限、网页 PUT /data 用；MP_WRITE=1 才允许写（网页切到数据库之前保持关闭，免得两边数据分叉）
+  const variables = ['MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_PASSWORD', 'MYSQL_DATABASE', 'EDIT_TOKEN', 'MP_WRITE'].filter(k => vars[k]).map(k => ({ key: k, value: vars[k] }));
   let exists = true;
   try { await cloudAPI.scfGetFunctionInfo({ namespace: env.envId, region, functionName: FN, codeSecret }, topts()); }
   catch (e) { if (e.code !== 'ResourceNotFound.Function' && !/ResourceNotFound/.test(String(e.message))) throw e; exists = false; }
@@ -76,7 +77,7 @@ async function func(envId) {
   await waitActive(env.envId, region, codeSecret);
   await cloudAPI.scfUpdateFunctionInfo({ namespace: env.envId, region, functionName: FN, memorySize: 256, timeout: 40, environment: { variables } }, topts());
   await waitActive(env.envId, region, codeSecret);
-  console.log('云函数已部署，环境变量：' + variables.map(v => v.key).join(', '));
+  console.log('云函数已部署，环境变量：' + variables.map(v => v.key + (v.key === 'MP_WRITE' ? '=' + v.value : '')).join(', '));
   try {
     const r = await cloudAPI.scfInvokeFunction({ namespace: env.envId, region, functionName: FN, data: JSON.stringify({ action: 'meta' }), codeSecret }, topts());
     console.log('试调用 meta：', r.retMsg || JSON.stringify(r).slice(0, 300));
@@ -87,7 +88,7 @@ const setting = { es6: true, enhance: true, minify: true, minifyJS: true, minify
 
 async function main() {
   const [cmd, a1, a2] = process.argv.slice(2);
-  if (cmd !== 'envs' && cmd !== 'func') require('./sync-core.js');
+  if (cmd !== 'envs') require('./sync-core.js');
   if (cmd === 'envs') { const l = await envs(); console.log(l.length ? l.map(e => `${e.envId}  ${e.alias || ''}  ${e.status || ''}  ${e.functions?.[0]?.region || ''}`).join('\n') : '（没有云开发环境）'); }
   else if (cmd === 'func') await func(a1);
   else if (cmd === 'preview') {

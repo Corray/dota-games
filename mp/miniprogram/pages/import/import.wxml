@@ -1,0 +1,54 @@
+<view class="wrap">
+  <view class="err" wx:if="{{err}}">{{err}}</view>
+  <view class="card" wx:if="{{!loading && !writable}}">
+    <view class="b">数据库写入还没开放</view>
+    <view class="muted">网页还在用旧的 Cloudflare 存储。等网页也切到数据库后才开放写入，免得网页和小程序两边数据分叉。可以先查询看看。</view>
+  </view>
+  <view class="card" wx:if="{{!loading && writable && !admin}}">
+    <view class="b">绑定写权限</view>
+    <view class="muted">输入一次编辑口令（和网页上的编辑口令相同），这个微信以后导入就不用再输。</view>
+    <view class="row" style="margin-top:12rpx"><input class="input grow" password placeholder="编辑口令" value="{{token}}" bindinput="onToken" /><view class="chip on" style="margin-left:12rpx" bindtap="doBind">绑定</view></view>
+  </view>
+  <view class="muted" wx:if="{{admin}}">✓ 这个微信已有写权限</view>
+
+  <view class="card">
+    <view class="row between"><text class="b">比赛 ID</text><text class="accent" bindtap="paste">从剪贴板粘贴</text></view>
+    <textarea class="ta" placeholder="一行一个，或用空格 / 逗号分隔；也可以直接粘贴比赛链接" value="{{text}}" bindinput="onText" maxlength="-1" auto-height />
+    <view class="muted">识别到 {{ids.length}} 场</view>
+    <view class="wrow"><text>自动新建对不上名单的选手</text><switch checked="{{autoNew}}" bindchange="onAutoNew" color="#e0a83a" /></view>
+    <view class="wrow"><text>覆盖已存在的比赛</text><switch checked="{{overwrite}}" bindchange="onOverwrite" color="#e0a83a" /></view>
+    <view class="muted">选手先按 Steam ID 对，再按昵称对。关掉自动新建时，对不上的人会被略过，这场就少人。</view>
+    <view class="row" style="margin-top:16rpx">
+      <view class="btn" bindtap="doPreview">查询</view>
+      <view class="btn primary {{ready && writable && admin ? '' : 'off'}}" bindtap="doImport" wx:if="{{ready}}">确认导入 {{ready}} 场</view>
+    </view>
+    <view class="muted" wx:if="{{busy}}" style="margin-top:10rpx">{{busy}}</view>
+  </view>
+
+  <view class="card" wx:if="{{done}}">
+    <view class="b">导入完成：成功 {{done.ok}} 场<text wx:if="{{done.fail}}">，失败 {{done.fail}} 场</text></view>
+    <view class="muted">新建选手 {{done.created}} 名 · 带录像解析 {{done.replay}} 场<text wx:if="{{done.created}}"> · 新建的选手昵称可在网页「选手名单」里改</text></view>
+    <view class="err sm" wx:for="{{done.errs}}" wx:key="*this">{{item}}</view>
+  </view>
+
+  <view class="card" wx:for="{{preview}}" wx:key="id">
+    <block wx:if="{{item.ok}}">
+      <view class="row between"><text class="b">{{item.id}}</text><text class="side {{item.winner}}">{{item.wtxt}}</text></view>
+      <view class="muted">{{item.date}} · 比分 {{item.score}}<text wx:if="{{item.league}}"> · 联赛 {{item.league}}</text> · {{item.source}}<text wx:if="{{item.replay}}"> · 有录像</text><text class="accent" wx:if="{{item.existed}}"> · 将覆盖已有记录</text></view>
+      <view class="warn" wx:if="{{item.created}}">会新建 {{item.created}} 名选手（标 ★新）</view>
+      <view class="warn" wx:if="{{item.dropped}}">{{item.dropped}} 人对不上名单，会被略过</view>
+      <view class="teams">
+        <view class="team"><view class="tn">天辉</view><view class="pl" wx:for="{{item.radiant}}" wx:for-item="p" wx:key="name"><text class="accent" wx:if="{{p.isNew}}">★新 </text>{{p.name}}<view class="muted sm">{{p.hero}} {{p.kda}}</view></view></view>
+        <view class="team"><view class="tn">夜魇</view><view class="pl" wx:for="{{item.dire}}" wx:for-item="p" wx:key="name"><text class="accent" wx:if="{{p.isNew}}">★新 </text>{{p.name}}<view class="muted sm">{{p.hero}} {{p.kda}}</view></view></view>
+      </view>
+    </block>
+    <block wx:else>
+      <view class="b">{{item.id}}</view><view class="{{item.skipped ? 'muted' : 'err'}}">{{item.error}}</view>
+    </block>
+  </view>
+
+  <view class="card">
+    <view class="b">联赛导入</view>
+    <view class="muted">按联赛 ID 拉全部比赛要用 Steam 官方接口，国内服务器连不上（云函数也在国内），小程序做不了。可以在网页（开代理）用「比赛列表 → 联赛导入」；或者把比赛 ID 复制过来，在上面一次粘贴多场。</view>
+  </view>
+</view>

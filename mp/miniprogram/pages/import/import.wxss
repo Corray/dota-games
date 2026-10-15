@@ -1,0 +1,15 @@
+.b { font-weight: 600; }
+.sm { font-size: 22rpx; }
+.ta { width: 100%; min-height: 160rpx; background: #1d222a; border: 1px solid #2a313c; border-radius: 12rpx; padding: 14rpx; box-sizing: border-box; margin: 12rpx 0 8rpx; color: #e6e9ef; font-size: 26rpx; }
+.wrow { display: flex; justify-content: space-between; align-items: center; padding: 12rpx 0; border-bottom: 1px solid #1f252e; }
+.btn { padding: 14rpx 36rpx; border-radius: 12rpx; background: #1d222a; border: 1px solid #2a313c; margin-right: 16rpx; }
+.btn.primary { background: #e0a83a; color: #0e1115; border-color: #e0a83a; font-weight: 600; }
+.btn.off { opacity: .4; }
+.warn { color: #e0a83a; font-size: 24rpx; margin-top: 6rpx; }
+.side { font-size: 22rpx; padding: 2rpx 10rpx; border-radius: 6rpx; }
+.side.radiant { background: rgba(127, 177, 53, .15); color: #7fb135; }
+.side.dire { background: rgba(208, 70, 59, .15); color: #d0463b; }
+.teams { display: flex; margin-top: 10rpx; }
+.team { flex: 1; min-width: 0; padding-right: 10rpx; }
+.tn { font-size: 22rpx; color: #8b93a1; }
+.pl { font-size: 26rpx; margin: 6rpx 0; }
