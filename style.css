@@ -398,6 +398,7 @@ input.au-nnum.wide{width:4.4em}
 .score-cfg select{width:auto;padding:4px 6px;font-size:12px}
 .sc-v{font-variant-numeric:tabular-nums}
 .sc-bar{background:var(--accent)}
+.sc-plain{color:var(--muted)}
 .sc-thin{margin-left:2px}
 
 /* ---- 性价比阵容推荐 ---- */

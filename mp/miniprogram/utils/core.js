@@ -125,7 +125,7 @@ function computeStats(matches, so = SCORE_DEF) {
     st.eloLow = st.eloHist.reduce((a, h) => Math.min(a, h.elo), ELO_BASE);
     st.pts = ptsOf(st.w, st.g);
   }
-  // 积分归一要用范围内最高分：挂到每个人身上，playerScore 只拿得到单人统计
+  // 范围内最高积分挂到每个人身上，列表里画积分条用
   const ptsMax = Object.values(ps).reduce((a, s) => Math.max(a, s.pts), 0);
   for (const st of Object.values(ps)) st.ptsMax = ptsMax;
   return { players: ps, heroes, duos, total: matches.length, radiantWins, avgDuration: durN ? durSum / durN : null, elo, posKda, preds, seqTotal: seq };
@@ -263,8 +263,9 @@ function predictionReport(preds, margin = 0.05) {
 const topKey = (obj, by = 'g') => Object.entries(obj).sort((a, b) => b[1][by] - a[1][by])[0]?.[0];
 
 
-const SCORE_DEF = { wRank: 40, wElo: 30, wKda: 20, wHero: 10, wPts: 10, trust: 3, heroMode: 'main', heroTop: 3, poolCap: 12, mov: true };
-const scoreWsum = o => ((o.wRank || 0) + (o.wElo || 0) + (o.wKda || 0) + (o.wHero || 0) + (o.wPts || 0)) || 1;
+const SCORE_DEF = { wRank: 40, wElo: 30, wKda: 20, wHero: 10, trust: 3, heroMode: 'main', heroTop: 3, poolCap: 12, mov: true };
+// 评分四项权重和（积分只展示，不计入评分）
+const scoreWsum = o => ((o.wRank || 0) + (o.wElo || 0) + (o.wKda || 0) + (o.wHero || 0)) || 1;
 
 const ELO_BASE = 1500, ELO_K = 32;
 
@@ -299,13 +300,10 @@ function playerScore(st, p, opt) {
   const kdaRaw = st && st.kdaG ? (st.k + st.a) / Math.max(st.d, 1) : null;
   const kda = shrink(st?.kdaRel != null ? Math.min(st.kdaRel / KDA_REL_CAP, 1) : null);
   const hero = shrink(st ? heroScore(st, o) : null);
-  // 积分：本人积分 ÷ 范围内最高积分。和场次强相关（多打多得），不做样本收缩；没打过 = 0
-  const ptsRaw = st ? st.pts || 0 : 0;
-  const pts = st && st.ptsMax ? ptsRaw / st.ptsMax : 0;
   const wsum = scoreWsum(o);
-  const raw = (o.wRank * rank + o.wElo * elo + o.wKda * kda + o.wHero * hero + (o.wPts || 0) * pts) / wsum;
+  const raw = (o.wRank * rank + o.wElo * elo + o.wKda * kda + o.wHero * hero) / wsum;
   const win = g ? st.w / g : null;
-  return { score: raw * 100, raw, rank, elo, eloRaw, kda, kdaRaw, pts, ptsRaw, ptsMax: st ? st.ptsMax || 0 : 0, kdaRel: st?.kdaRel ?? null, kdaExp: st?.kdaExp ?? null, hero, win, conf, enough: conf >= 0.5, g, closeG: st?.closeG || 0, closeW: st?.closeW || 0 };
+  return { score: raw * 100, raw, rank, elo, eloRaw, kda, kdaRaw, kdaRel: st?.kdaRel ?? null, kdaExp: st?.kdaExp ?? null, hero, win, conf, enough: conf >= 0.5, g, closeG: st?.closeG || 0, closeW: st?.closeW || 0 };
 }
 
 

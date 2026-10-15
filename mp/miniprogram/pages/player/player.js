@@ -55,7 +55,6 @@ Page({
         { k: 'Elo', v: sp(sc.elo), w: Math.round(so.wElo / wsum * 100), s: `Elo ${Math.round(sc.eloRaw)}` },
         { k: 'KDA', v: sp(sc.kda), w: Math.round(so.wKda / wsum * 100), s: sc.kdaRel != null ? `同号位平均的 ${sc.kdaRel.toFixed(2)} 倍` : '' },
         { k: '英雄', v: sp(sc.hero), w: Math.round(so.wHero / wsum * 100) },
-        { k: '积分', v: sp(sc.pts), w: Math.round((so.wPts || 0) / wsum * 100), s: `${sc.ptsRaw} 分，范围内最高 ${sc.ptsMax}` },
       ],
       conf: `样本置信度 ${Math.round(sc.conf * 100)}%（${s.g} 场，可信场次 ${so.trust}）`,
       closeTxt: s.closeG ? `胶着局（击杀差 ≤5）${s.closeW} 胜 ${s.closeG - s.closeW} 负` : '',

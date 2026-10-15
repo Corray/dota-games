@@ -42,7 +42,7 @@ Page({
       pid: p.id, name: p.name, rank: p.rank + (p.stars ? ' ' + p.stars : ''),
       pos: (p.positions || []).map(i => C.POS_SHORT[i]).filter(Boolean),
       heroes: (p.heroes || []).slice(0, 6),
-      score: sc.score.toFixed(1), thin: !sc.enough, bar: Math.round(sc.raw * 100),
+      score: sc.score.toFixed(1), thin: !sc.enough, bar: s && s.ptsMax ? Math.round(s.pts / s.ptsMax * 100) : 0,
       g: s ? s.g : 0, wr: s ? C.pct(s.w, s.g) : '-', pts: s ? s.pts : 0, mmr: p.mmr || '',
       badges: (v.badges[p.id] || []).map(b => b.icon).join(''),
     }));

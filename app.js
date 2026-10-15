@@ -311,8 +311,8 @@ function renderPlayers() {
       <td>${rankBadge(p)}</td>
       <td>${p.positions.map(i => `<span class="pos-chip">${POS_SHORT[i]}</span>`).join('') || '<span class="hint">-</span>'}</td>
       <td class="wrap">${p.heroes.map(h => `<span class="hero-chip">${esc(h)}</span>`).join('') || '<span class="hint">-</span>'}</td>
-      <td class="num" title="${scoreTip(sc)}"><strong class="sc-v">${sc.score.toFixed(1)}</strong><span class="bar sc-bar" style="width:${Math.round(sc.raw * 40)}px"></span>${sc.enough ? '' : '<span class="hint sc-thin" title="样本不足，KDA / 英雄向中性收缩">*</span>'}</td>
-      <td class="num">${s ? s.pts : 0}</td>
+      <td class="num sc-plain" title="${scoreTip(sc)}">${sc.score.toFixed(1)}${sc.enough ? '' : '<span class="hint sc-thin" title="样本不足，KDA / 英雄向中性收缩">*</span>'}</td>
+      <td class="num" title="内战积分：胜 +${DotaCore.PTS_WIN} / 负 +${DotaCore.PTS_LOSS}${s ? `，${s.w} 胜 ${s.g - s.w} 负` : ''}"><strong class="sc-v">${s ? s.pts : 0}</strong><span class="bar sc-bar" style="width:${s && s.ptsMax ? Math.round(s.pts / s.ptsMax * 40) : 0}px"></span></td>
       <td class="num">${p.mmr || '<span class="hint">-</span>'}</td>
       <td class="num">${s ? s.g : 0}</td>
       <td class="num">${s ? pct(s.w, s.g) : '-'}</td>
@@ -798,7 +798,7 @@ let lastStatsRows = [];
     if (ui.statsSort.key === k) ui.statsSort.dir *= -1; else ui.statsSort = { key: k, dir: (k === 'name' || k === 'rank') ? 1 : -1 };
     renderStats();
   });
-  const swIds = { 'sw-rank': 'wRank', 'sw-elo': 'wElo', 'sw-kda': 'wKda', 'sw-hero': 'wHero', 'sw-pts': 'wPts', 'sw-trust': 'trust', 'sw-mode': 'heroMode' };
+  const swIds = { 'sw-rank': 'wRank', 'sw-elo': 'wElo', 'sw-kda': 'wKda', 'sw-hero': 'wHero', 'sw-trust': 'trust', 'sw-mode': 'heroMode' };
   Object.entries(swIds).forEach(([id, key]) => $('#' + id).addEventListener('input', e => {
     const o = loadScoreOpt();
     o[key] = key === 'heroMode' ? e.target.value : Math.max(key === 'trust' ? 1 : 0, Number(e.target.value) || 0);
@@ -895,7 +895,6 @@ const scoreTip = sc => {
     part('对手加权', o.wElo, sc.elo, `Elo ${Math.round(sc.eloRaw)}${sc.win != null ? ` · 胜率 ${(sc.win * 100).toFixed(0)}%` : ''}${sc.closeG ? ` · 胶着局 ${sc.closeW}/${sc.closeG}` : ''}${o.mov === false ? ' · 未用比分差修正' : ''}`),
     part('KDA', o.wKda, sc.kda, sc.kdaRel != null ? `${sc.kdaRaw.toFixed(2)}，同号位平均 ${sc.kdaExp.toFixed(2)} 的 ${sc.kdaRel.toFixed(2)} 倍` : '无 KDA 记录'),
     part('英雄', o.wHero, sc.hero),
-    part('积分', o.wPts || 0, sc.pts, `${sc.ptsRaw} 分，范围内最高 ${sc.ptsMax}（胜 +${DotaCore.PTS_WIN} / 负 +${DotaCore.PTS_LOSS}）`),
     `样本置信 ${(sc.conf * 100).toFixed(0)}%（${sc.g} 场，可信场次 ${o.trust}）${sc.conf < 0.5 ? '，KDA / 英雄向中性收缩' : ''}`,
   ].join('\n');
 };
@@ -907,7 +906,7 @@ function renderStats() {
   const st = computeStats(ms);
   const minG = Math.max(1, Number($('#sf-min').value) || 1);
   const so = loadScoreOpt();
-  $('#sw-rank').value = so.wRank; $('#sw-elo').value = so.wElo; $('#sw-kda').value = so.wKda; $('#sw-hero').value = so.wHero; $('#sw-pts').value = so.wPts ?? 0;
+  $('#sw-rank').value = so.wRank; $('#sw-elo').value = so.wElo; $('#sw-kda').value = so.wKda; $('#sw-hero').value = so.wHero;
   $('#sw-mode').value = so.heroMode; $('#sw-trust').value = so.trust; $('#sw-mov').checked = so.mov !== false;
   $('#sw-sum').textContent = `权重和 ${DotaCore.scoreWsum(so)}（按比例归一，不必凑 100）`;
 

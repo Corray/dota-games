@@ -252,7 +252,7 @@ function advancing(st, t) {
 function strengthScores(pids, opt) {
   const P = playerMap();
   const stats = A.computeStats(S().matches).players;
-  const o = { wRank: opt.wRank, wElo: opt.wElo, wKda: opt.wKda, wHero: opt.wHero || 0, wPts: 0, trust: opt.minGames, heroMode: opt.heroMode || 'main' };   // 均衡分组不看积分（老选手积分天然高）
+  const o = { wRank: opt.wRank, wElo: opt.wElo, wKda: opt.wKda, wHero: opt.wHero || 0, trust: opt.minGames, heroMode: opt.heroMode || 'main' };
   return new Map(pids.map(pid => {
     const p = P.get(pid);
     const r = A.playerScore(stats[pid], p, o);
