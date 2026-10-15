@@ -29,10 +29,15 @@ const PWESPORTS_REPLAY = 'https://gwapi.pwesports.cn/appdatacenter/api/v1/dota2/
 const DEFAULT_PROXY = 'https://dota-match-proxy.corray.workers.dev'; // Cloudflare Worker 中转，源码见 worker/
 const PROXY_KEY = 'dota-proxy-url';
 const getProxy = () => (localStorage.getItem(PROXY_KEY) ?? DEFAULT_PROXY).trim().replace(/\/+$/, '');
-// 云同步接口地址，可独立于中转：Worker 的 workers.dev 域名在国内连不上时，把 server/ 目录的 MySQL / MongoDB 版接口部署到国内能直连的地方填这里。
-// 留空 = 沿用中转地址（Worker 自带 /data）。
+// 云同步接口地址，可独立于中转：Worker 的 workers.dev 域名在国内连不上时，把 server/ 目录的 MySQL / MongoDB 版接口部署到国内能直连的地方。
+// 优先级：本机在 ☁ 弹窗里填的 > DEFAULT_DATA_URL（数据库接口部署好后填这里，所有设备自动改用数据库）> 中转地址（Worker 自带 /data）。
+const DEFAULT_DATA_URL = '';
 const DATA_KEY = 'dota-data-url';
-const getDataUrl = () => (localStorage.getItem(DATA_KEY) || '').trim().replace(/\/+$/, '') || getProxy();
+const getDataUrl = () => (localStorage.getItem(DATA_KEY) || '').trim().replace(/\/+$/, '') || DEFAULT_DATA_URL || getProxy();
+// 记住上次同步用的是哪个后端；换了后端（手动改地址或 DEFAULT_DATA_URL 变了）时，本地版本号作废，
+// 且本地没有未同步改动的话直接采用新后端的数据（数据库优先），不弹冲突窗
+const BACKEND_KEY = 'dota-cloud-backend';
+const SWITCH_KEY = 'dota-cloud-switching';
 
 // ============ 只读分享模式 ============
 /* ?share=xxx.json 打开时进入只读快照模式：数据从该 JSON 拉取而不是 localStorage，
@@ -2262,7 +2267,14 @@ function setCloudStatus(status, msg = '') {
   el.title = [msg, ver, '点击查看云同步设置'].filter(Boolean).join('\n');
 }
 const persistLocal = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-function setCloudVersion(v, at) { cloud.version = v; cloud.updatedAt = at || null; localStorage.setItem(CLOUD_VER_KEY, String(v)); }
+function setCloudVersion(v, at) { cloud.version = v; cloud.updatedAt = at || null; localStorage.setItem(CLOUD_VER_KEY, String(v)); if (v > 0) localStorage.removeItem(SWITCH_KEY); }
+function checkBackendSwitch() {
+  const cur = getDataUrl(), prev = localStorage.getItem(BACKEND_KEY);
+  localStorage.setItem(BACKEND_KEY, cur);
+  if (prev === null || prev === cur) return false;   // 第一次记录（老用户升级）不算切换，免得无故弹窗
+  setCloudVersion(0, null); localStorage.setItem(SWITCH_KEY, '1');
+  return true;
+}
 const isDirty = () => localStorage.getItem(CLOUD_DIRTY_KEY) === '1';
 const setDirty = d => d ? localStorage.setItem(CLOUD_DIRTY_KEY, '1') : localStorage.removeItem(CLOUD_DIRTY_KEY);
 const hasData = d => !!((d.players || []).length || (d.matches || []).length || (d.tournaments || []).length);
@@ -2354,8 +2366,10 @@ async function cloudPull({ silent = false } = {}) {
   catch (e) { setCloudStatus('err', e.message); if (!silent) toast(`连接云端失败：${e.message}，当前使用本地数据`, 'err'); return; }
   cloud.updatedAt = r.updatedAt;
   const remote = r.data || { players: [], matches: [], tournaments: [] };
-  // 本地版本号为 0 但有数据 = 升级前的老用户或从没同步过，来源不明，一律当作有未同步改动，不能静默丢
-  const localChanged = isDirty() || (cloud.version === 0 && hasData(state));
+  // 本地版本号为 0 但有数据 = 升级前的老用户或从没同步过，来源不明，一律当作有未同步改动，不能静默丢。
+  // 例外：刚换了后端且本地没有欠推的改动 → 本地只是旧后端的缓存，以新后端（数据库）为准
+  const switching = localStorage.getItem(SWITCH_KEY) === '1' && !isDirty();
+  const localChanged = isDirty() || (cloud.version === 0 && hasData(state) && !switching);
 
   if (!hasData(remote)) {                       // 云端空：本地有就上传做初始版本
     setCloudVersion(r.version, r.updatedAt);
@@ -2368,7 +2382,8 @@ async function cloudPull({ silent = false } = {}) {
   }
   if (!localChanged) {                          // 云端更新、本地干净：直接采用
     adoptRemote(remote, r.version, r.updatedAt); setCloudStatus('ok');
-    if (!silent) toast(`已从云端加载最新数据（v${r.version}）`, 'ok');
+    if (switching) toast(`已切换到新的云同步地址，采用其中的数据（v${r.version}）`, 'ok');
+    else if (!silent) toast(`已从云端加载最新数据（v${r.version}）`, 'ok');
     return;
   }
   setCloudStatus('conflict', '云端与本地都有改动');
@@ -2388,7 +2403,7 @@ function openCloudSettings() {
   const customUrl = (localStorage.getItem(DATA_KEY) || '').trim().replace(/\/+$/, '');
   const shareLink = `${location.origin}${location.pathname}?share=cloud${customUrl ? '&data=' + encodeURIComponent(customUrl) : ''}`;
   showModal(`<h2>云同步</h2>
-    <p class="hint">所有设备打开同一个网址看到的是同一份数据，本地浏览器只是缓存。云同步地址：<code>${esc(getDataUrl() || '（未配置，云同步不可用）')}</code>${customUrl ? '' : '（沿用中转地址）'}。</p>
+    <p class="hint">所有设备打开同一个网址看到的是同一份数据，本地浏览器只是缓存。云同步地址：<code>${esc(getDataUrl() || '（未配置，云同步不可用）')}</code>${customUrl ? '（本机设置）' : DEFAULT_DATA_URL ? '（默认数据库接口）' : '（沿用中转地址）'}。</p>
     <p class="hint">当前：<b>${esc(CLOUD_LABEL[cloud.status] || cloud.status)}</b>${cloud.msg ? ' · ' + esc(cloud.msg) : ''}${cloud.version ? ` · 云端版本 v${cloud.version}` : ''}${cloud.updatedAt ? ' · ' + esc(new Date(cloud.updatedAt).toLocaleString('zh-CN')) : ''}${isDirty() ? ' · <b>本地有未同步改动</b>' : ''}</p>
     <div class="form-actions">
       <button id="cs-pull" type="button">从云端拉取</button>
@@ -2403,15 +2418,15 @@ function openCloudSettings() {
   $('#cs-push').onclick = () => { hideModal(); setDirty(true); cloud.seq++; cloudPush(); };
   $('#cs-token').onclick = () => { if (askToken()) { toast('口令已保存', 'ok'); if (isDirty()) cloudPush(); } };
   $('#cs-url').onclick = () => {
-    const v = prompt('云同步接口地址（部署好的 server/ 接口，如 https://xxx.fcapp.run）。留空 = 沿用中转地址：', customUrl);
+    const v = prompt(`云同步接口地址（部署好的 server/ 接口，如 https://xxx.fcapp.run）。留空 = ${DEFAULT_DATA_URL ? '用默认数据库接口' : '沿用中转地址'}：`, customUrl);
     if (v === null) return;
     const clean = v.trim().replace(/\/+$/, '');
     if (clean && !/^https?:\/\//.test(clean)) return toast('地址要以 http(s):// 开头', 'err');
     if (clean === customUrl) return;
     if (clean) localStorage.setItem(DATA_KEY, clean); else localStorage.removeItem(DATA_KEY);
-    // 换了后端，本地记的版本号是旧后端的，归零后由 cloudPull 决定：新后端空 → 上传本地做初始版本；两边都有 → 弹冲突让人选
-    setCloudVersion(0, null); if (hasData(state)) setDirty(true);
-    hideModal(); toast(clean ? '云同步地址已改为 ' + clean : '云同步地址已清除，沿用中转地址', 'ok'); cloudPull();
+    // 换了后端：新后端空 → 上传本地做初始版本；有数据且本地没有欠推的改动 → 直接采用新后端；本地有欠推的 → 弹冲突让人选
+    checkBackendSwitch();
+    hideModal(); toast(clean ? '云同步地址已改为 ' + clean : '云同步地址已清除，' + (DEFAULT_DATA_URL ? '用默认数据库接口' : '沿用中转地址'), 'ok'); cloudPull();
   };
   $('#cs-toggle').onclick = () => {
     hideModal();
@@ -2439,7 +2454,7 @@ function applyReadonlyChrome() {
   switchTab('stats');
 }
 renderAll();
-if (!READONLY) cloudPull();
+if (!READONLY) { checkBackendSwitch(); cloudPull(); }
 if (READONLY) {
   applyReadonlyChrome();
   fetch(SHARE_URL, { cache: 'no-cache' })

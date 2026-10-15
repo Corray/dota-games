@@ -39,6 +39,25 @@ set -a; source .env; set +a; node index.js
 curl http://127.0.0.1:8787/
 ```
 
+## 从旧云端搬数据
+
+`migrate.mjs` 把现有云端（Cloudflare KV）的数据原样搬进数据库，版本号和更新时间一起搬：
+
+```bash
+# workers.dev 要代理才能访问时，先用 curl 下载（curl 走 HTTPS_PROXY，Node 的 fetch 不走）
+curl -s https://dota-match-proxy.corray.workers.dev/data -o dump.json
+set -a; source .env; set +a
+node migrate.mjs --file dump.json          # 库为空或库里更旧时才写；要覆盖加 --force
+```
+
+写完会回读核对，打印「与源数据完全一致」才算成功。
+
+## 页面怎么切到数据库
+
+- 单台设备：☁ → 云同步地址 → 填接口地址。
+- 所有设备一起切：把地址填进 `app.js` 的 `DEFAULT_DATA_URL` 并发布页面。
+- 切换时本地没有未同步的改动 → 直接采用数据库的数据，不弹窗；有未同步改动 → 弹冲突窗让你选。
+
 ## 部署到阿里云函数计算 FC 3.0（自定义运行时）
 
 1. 控制台 → 函数计算 3.0 → 创建函数 → **Web 函数** → 运行环境选 Node.js 20（自定义运行时）。
