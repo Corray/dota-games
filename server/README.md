@@ -1,6 +1,6 @@
-# 云同步接口 · MongoDB Atlas 版
+# 云同步接口 · MySQL / MongoDB 版
 
-和 `worker/`（Cloudflare Worker + KV）提供的 `/data` 接口完全一致，只是存储换成 MongoDB Atlas。
+和 `worker/`（Cloudflare Worker + KV）提供的 `/data` 接口完全一致，只是存储换成 MySQL 或 MongoDB Atlas，按环境变量二选一。
 用途：`*.workers.dev` 在国内直连不了时，把这个服务部署到国内能直连的地方，页面「☁ 云端 → 云同步地址」填它的地址即可，
 中转（比赛查询 / 联赛导入）仍走 Worker，互不影响。
 
@@ -18,13 +18,17 @@
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `MONGODB_URI` | 是 | Atlas 连接串 `mongodb+srv://用户:密码@cluster0.xxx.mongodb.net` |
 | `EDIT_TOKEN` | 否 | 编辑口令。不设则只读 |
-| `MONGODB_DB` | 否 | 库名，默认 `dota` |
+| `MYSQL_HOST` | 二选一 | 设了就用 MySQL，优先于 MongoDB |
+| `MYSQL_PORT` `MYSQL_USER` `MYSQL_PASSWORD` `MYSQL_DATABASE` | MySQL 时 | 账号要有该库的建表和读写权限，首次请求自动建表 `dota_state` |
+| `MONGODB_URI` | 二选一 | Atlas 连接串 `mongodb+srv://用户:密码@cluster0.xxx.mongodb.net` |
+| `MONGODB_DB` | 否 | MongoDB 库名，默认 `dota` |
 | `PORT` | 否 | 默认 8787；阿里云函数计算注入的 `FC_SERVER_PORT` 优先 |
 | `DNS_SERVERS` | 否 | 运营商 DNS 解析不了 Atlas 的 SRV/TXT 记录时填 `223.5.5.5,119.29.29.29` |
 
-Atlas 侧要先做：**Network Access 允许 `0.0.0.0/0`**（服务器出口 IP 不固定），数据库用户要有读写权限。
+数据库侧要先做：**白名单允许 `0.0.0.0/0`**（函数计算出口 IP 不固定；Atlas 在 Network Access，百度云 GaiaDB 在集群白名单），账号要有读写权限。
+
+如果接口和 MySQL 部署在同一家云的同一地域（如百度云北京），白名单可以只放内网网段，更安全。
 
 ## 本地跑
 
@@ -58,5 +62,6 @@ MONGODB_URI=... EDIT_TOKEN=... PORT=8787 node index.js    # 用 pm2 / systemd �
 
 ## 限制
 
-- MongoDB 单文档 16MB，这里按 15MB 拦截；当前全量数据 1MB 量级。
+- 统一按 15MB 拦截（MongoDB 单文档上限 16MB）；当前全量数据 1MB 量级。
+- MySQL 只存一行 `id = 'state'`，乐观锁是 `UPDATE … WHERE version = ?`，首次写入是 `INSERT IGNORE`。
 - 整份覆盖 + 版本号乐观锁，跟 Worker 版一样不做逐条合并。

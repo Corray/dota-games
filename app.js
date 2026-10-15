@@ -29,7 +29,7 @@ const PWESPORTS_REPLAY = 'https://gwapi.pwesports.cn/appdatacenter/api/v1/dota2/
 const DEFAULT_PROXY = 'https://dota-match-proxy.corray.workers.dev'; // Cloudflare Worker 中转，源码见 worker/
 const PROXY_KEY = 'dota-proxy-url';
 const getProxy = () => (localStorage.getItem(PROXY_KEY) ?? DEFAULT_PROXY).trim().replace(/\/+$/, '');
-// 云同步接口地址，可独立于中转：Worker 的 workers.dev 域名在国内连不上时，把 server/ 目录的 Atlas 版接口部署到国内能直连的地方填这里。
+// 云同步接口地址，可独立于中转：Worker 的 workers.dev 域名在国内连不上时，把 server/ 目录的 MySQL / MongoDB 版接口部署到国内能直连的地方填这里。
 // 留空 = 沿用中转地址（Worker 自带 /data）。
 const DATA_KEY = 'dota-data-url';
 const getDataUrl = () => (localStorage.getItem(DATA_KEY) || '').trim().replace(/\/+$/, '') || getProxy();
