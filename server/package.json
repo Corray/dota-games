@@ -1,0 +1,11 @@
+{
+  "name": "dota-data-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dota 内战记录云同步接口（MongoDB Atlas 版），与 Cloudflare Worker 的 /data 接口完全一致",
+  "type": "module",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "mongodb": "^6.17.0" }
+}

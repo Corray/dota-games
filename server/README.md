@@ -1,0 +1,62 @@
+# 云同步接口 · MongoDB Atlas 版
+
+和 `worker/`（Cloudflare Worker + KV）提供的 `/data` 接口完全一致，只是存储换成 MongoDB Atlas。
+用途：`*.workers.dev` 在国内直连不了时，把这个服务部署到国内能直连的地方，页面「☁ 云端 → 云同步地址」填它的地址即可，
+中转（比赛查询 / 联赛导入）仍走 Worker，互不影响。
+
+## 接口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/` | 健康检查：`db` 为 `ok` 表示连上了 Atlas |
+| GET | `/data` | `{ ok, version, updatedAt, data }` |
+| GET | `/data/meta` | 只返回版本号，页面切回前台时轻量探测 |
+| GET | `/data?strip=1` | 脱敏快照（去 Steam ID / 备注 / 赛事），`?share=cloud` 只读分享页用 |
+| PUT | `/data` | 整份覆盖写入；头 `X-Edit-Token` = 编辑口令，`X-Base-Version` = 读到的版本号，不一致返回 409 |
+
+## 环境变量
+
+| 变量 | 必填 | 说明 |
+|---|---|---|
+| `MONGODB_URI` | 是 | Atlas 连接串 `mongodb+srv://用户:密码@cluster0.xxx.mongodb.net` |
+| `EDIT_TOKEN` | 否 | 编辑口令。不设则只读 |
+| `MONGODB_DB` | 否 | 库名，默认 `dota` |
+| `PORT` | 否 | 默认 8787；阿里云函数计算注入的 `FC_SERVER_PORT` 优先 |
+| `DNS_SERVERS` | 否 | 运营商 DNS 解析不了 Atlas 的 SRV/TXT 记录时填 `223.5.5.5,119.29.29.29` |
+
+Atlas 侧要先做：**Network Access 允许 `0.0.0.0/0`**（服务器出口 IP 不固定），数据库用户要有读写权限。
+
+## 本地跑
+
+```bash
+cd server && npm install
+cp .env.example .env   # 填好
+set -a; source .env; set +a; node index.js
+curl http://127.0.0.1:8787/
+```
+
+## 部署到阿里云函数计算 FC 3.0（自定义运行时）
+
+1. 控制台 → 函数计算 3.0 → 创建函数 → **Web 函数** → 运行环境选 Node.js 20（自定义运行时）。
+2. 代码：把本目录（含 `node_modules`，先 `npm install --omit=dev`）打成 zip 上传，或用控制台在线编辑后执行 `npm install`。
+3. 启动命令 `node index.js`，监听端口填 9000（FC 会把它注入 `FC_SERVER_PORT`）。
+4. 环境变量：`MONGODB_URI`、`EDIT_TOKEN`。
+5. 触发器：HTTP 触发器，认证方式「无需认证」，方法 GET / PUT / OPTIONS。创建后得到 `https://xxx.fcapp.run` 这类地址。
+6. 浏览器打开 `https://xxx.fcapp.run/`，看到 `"db":"ok"` 即成功。
+7. 页面：☁ 云端 → 云同步地址 → 填这个地址 → 输入编辑口令。
+
+默认域名返回 HTML 会被强制下载，返回 JSON 不受影响，本服务只返回 JSON。
+免费额度与默认域名是否免备案以阿里云当前页面为准，部署前先用手机流量不开代理访问一次 `/`。
+
+## 部署到任意一台能跑 Node 的机器
+
+```bash
+npm install --omit=dev
+MONGODB_URI=... EDIT_TOKEN=... PORT=8787 node index.js    # 用 pm2 / systemd 守护
+```
+前面套 Nginx / Caddy 做 HTTPS（页面是 https 时浏览器不允许请求 http 接口）。
+
+## 限制
+
+- MongoDB 单文档 16MB，这里按 15MB 拦截；当前全量数据 1MB 量级。
+- 整份覆盖 + 版本号乐观锁，跟 Worker 版一样不做逐条合并。

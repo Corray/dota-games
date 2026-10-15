@@ -29,13 +29,18 @@ const PWESPORTS_REPLAY = 'https://gwapi.pwesports.cn/appdatacenter/api/v1/dota2/
 const DEFAULT_PROXY = 'https://dota-match-proxy.corray.workers.dev'; // Cloudflare Worker 中转，源码见 worker/
 const PROXY_KEY = 'dota-proxy-url';
 const getProxy = () => (localStorage.getItem(PROXY_KEY) ?? DEFAULT_PROXY).trim().replace(/\/+$/, '');
+// 云同步接口地址，可独立于中转：Worker 的 workers.dev 域名在国内连不上时，把 server/ 目录的 Atlas 版接口部署到国内能直连的地方填这里。
+// 留空 = 沿用中转地址（Worker 自带 /data）。
+const DATA_KEY = 'dota-data-url';
+const getDataUrl = () => (localStorage.getItem(DATA_KEY) || '').trim().replace(/\/+$/, '') || getProxy();
 
 // ============ 只读分享模式 ============
 /* ?share=xxx.json 打开时进入只读快照模式：数据从该 JSON 拉取而不是 localStorage，
    只留「统计」页签，所有写操作停掉。这样分享页和自己看到的是同一份渲染代码，
    统计口径不会出现两套。 */
 const SHARE_PARAM = new URLSearchParams(location.search).get('share');
-const SHARE_URL = SHARE_PARAM === 'cloud' ? `${getProxy()}/data?strip=1` : SHARE_PARAM;   // ?share=cloud：读云端实时脱敏快照，不用再手动发布 stats.json
+const SHARE_DATA = (new URLSearchParams(location.search).get('data') || '').trim().replace(/\/+$/, '');   // ?share=cloud&data=https://…：分享页指定云同步地址（打开的人浏览器里没有设置）
+const SHARE_URL = SHARE_PARAM === 'cloud' ? `${/^https?:\/\//.test(SHARE_DATA) ? SHARE_DATA : getDataUrl()}/data?strip=1` : SHARE_PARAM;   // ?share=cloud：读云端实时脱敏快照，不用再手动发布 stats.json
 const READONLY = !!SHARE_URL;
 let shareMeta = null;
 
@@ -49,7 +54,7 @@ const CLOUD_DIRTY_KEY = 'dota-cloud-dirty';    // '1' = 本地有改动尚未推
 const CLOUD_OFF_KEY = 'dota-cloud-off';        // '1' = 用户手动关闭云同步，纯本地模式
 const CLOUD_DEBOUNCE = 3000;
 const cloud = { version: Number(localStorage.getItem(CLOUD_VER_KEY)) || 0, updatedAt: null, status: 'idle', msg: '', timer: null, pushing: false, seq: 0 };
-const cloudUrl = (path = '') => { const p = getProxy(); return p ? `${p}/data${path}` : ''; };
+const cloudUrl = (path = '') => { const p = getDataUrl(); return p ? `${p}/data${path}` : ''; };
 const cloudOn = () => !READONLY && localStorage.getItem(CLOUD_OFF_KEY) !== '1' && !!cloudUrl();
 
 // ============ 状态 ============
@@ -2316,21 +2321,34 @@ async function cloudCheck() {
 function openCloudSettings() {
   const on = localStorage.getItem(CLOUD_OFF_KEY) !== '1';
   const hasToken = !!localStorage.getItem(CLOUD_TOKEN_KEY);
-  const shareLink = `${location.origin}${location.pathname}?share=cloud`;
+  const customUrl = (localStorage.getItem(DATA_KEY) || '').trim().replace(/\/+$/, '');
+  const shareLink = `${location.origin}${location.pathname}?share=cloud${customUrl ? '&data=' + encodeURIComponent(customUrl) : ''}`;
   showModal(`<h2>云同步</h2>
-    <p class="hint">数据存在 Cloudflare Worker 的 KV 里，所有设备打开同一个网址看到的是同一份，本地浏览器只是缓存。中转地址：<code>${esc(getProxy() || '（未配置，云同步不可用）')}</code>，可在「记录比赛」页的中转设置里改。</p>
+    <p class="hint">所有设备打开同一个网址看到的是同一份数据，本地浏览器只是缓存。云同步地址：<code>${esc(getDataUrl() || '（未配置，云同步不可用）')}</code>${customUrl ? '' : '（沿用中转地址）'}。</p>
     <p class="hint">当前：<b>${esc(CLOUD_LABEL[cloud.status] || cloud.status)}</b>${cloud.msg ? ' · ' + esc(cloud.msg) : ''}${cloud.version ? ` · 云端版本 v${cloud.version}` : ''}${cloud.updatedAt ? ' · ' + esc(new Date(cloud.updatedAt).toLocaleString('zh-CN')) : ''}${isDirty() ? ' · <b>本地有未同步改动</b>' : ''}</p>
     <div class="form-actions">
       <button id="cs-pull" type="button">从云端拉取</button>
       <button id="cs-push" type="button" ${isDirty() ? '' : 'class="ghost"'}>推送本地到云端</button>
       <button id="cs-token" type="button" class="ghost">${hasToken ? '修改' : '设置'}编辑口令</button>
       <button id="cs-toggle" type="button" class="ghost">${on ? '关闭云同步（纯本地）' : '开启云同步'}</button>
+      <button id="cs-url" type="button" class="ghost">云同步地址</button>
     </div>
     <p class="hint" style="margin-top:14px">只读分享链接，任何人打开只能看统计、改不了数据，且已剥掉 Steam ID / 备注 / 赛事：</p>
     <input type="text" readonly value="${esc(shareLink)}" style="width:100%" onclick="this.select()">`);
   $('#cs-pull').onclick = async () => { hideModal(); await cloudPull(); if (cloud.status === 'ok') toast('已是云端最新数据', 'ok'); };
   $('#cs-push').onclick = () => { hideModal(); setDirty(true); cloud.seq++; cloudPush(); };
   $('#cs-token').onclick = () => { if (askToken()) { toast('口令已保存', 'ok'); if (isDirty()) cloudPush(); } };
+  $('#cs-url').onclick = () => {
+    const v = prompt('云同步接口地址（部署好的 server/ 接口，如 https://xxx.fcapp.run）。留空 = 沿用中转地址：', customUrl);
+    if (v === null) return;
+    const clean = v.trim().replace(/\/+$/, '');
+    if (clean && !/^https?:\/\//.test(clean)) return toast('地址要以 http(s):// 开头', 'err');
+    if (clean === customUrl) return;
+    if (clean) localStorage.setItem(DATA_KEY, clean); else localStorage.removeItem(DATA_KEY);
+    // 换了后端，本地记的版本号是旧后端的，归零后由 cloudPull 决定：新后端空 → 上传本地做初始版本；两边都有 → 弹冲突让人选
+    setCloudVersion(0, null); if (hasData(state)) setDirty(true);
+    hideModal(); toast(clean ? '云同步地址已改为 ' + clean : '云同步地址已清除，沿用中转地址', 'ok'); cloudPull();
+  };
   $('#cs-toggle').onclick = () => {
     hideModal();
     if (on) { localStorage.setItem(CLOUD_OFF_KEY, '1'); clearTimeout(cloud.timer); cloud.timer = null; setCloudStatus('off'); toast('云同步已关闭，改动只存本地'); }
