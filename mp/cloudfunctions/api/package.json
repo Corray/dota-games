@@ -1,0 +1,8 @@
+{
+  "name": "api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "小程序数据接口：从百度云 MySQL 读 dota_state（与 server/ 同一张表），第一期只读",
+  "main": "index.js",
+  "dependencies": { "mysql2": "^3.11.0" }
+}

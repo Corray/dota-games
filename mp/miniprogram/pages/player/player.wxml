@@ -1,0 +1,65 @@
+<view class="wrap">
+  <view class="err" wx:if="{{err}}">{{err}}</view>
+  <block wx:if="{{ok}}">
+    <view class="card">
+      <view class="row"><text class="pname">{{name}}</text><text class="rank">{{rank}}</text></view>
+      <view class="muted" wx:if="{{profile}}">{{profile}}</view>
+      <view class="muted" wx:if="{{league}}">只统计{{league === 'none' ? '无联赛 ID 的比赛' : '联赛 ' + league}}</view>
+    </view>
+    <view class="empty" wx:if="{{none}}">这个范围内还没打过比赛</view>
+
+    <block wx:if="{{!none}}">
+      <view class="tiles">
+        <view class="tile" wx:for="{{tiles}}" wx:key="k"><view class="k">{{item.k}}</view><view class="v">{{item.v}}</view><view class="s">{{item.s}}</view></view>
+      </view>
+
+      <view class="card" wx:if="{{badges.length}}">
+        <view class="sec">称号</view>
+        <view class="bd" wx:for="{{badges}}" wx:key="t"><text>{{item.t}}</text><view class="muted">{{item.d}}</view></view>
+      </view>
+
+      <view class="card">
+        <view class="sec">评分构成 <text class="muted">（各项 0-100，按默认权重 段位 40 / Elo 30 / KDA 20 / 英雄 10）</text></view>
+        <view class="part" wx:for="{{parts}}" wx:key="k">
+          <text class="pk">{{item.k}}</text><view class="track"><view class="fill" style="width:{{item.v}}%"></view></view><text class="pv">{{item.v}}</text>
+        </view>
+        <view class="muted" style="margin-top:8rpx">{{sides}}</view>
+      </view>
+
+      <view class="card" wx:if="{{bars.length > 1}}">
+        <view class="sec">Elo 走势 <text class="muted">（最近 {{bars.length}} 场，绿胜红负）</text></view>
+        <view class="spark"><view wx:for="{{bars}}" wx:key="index" class="b {{item.won ? 'w' : 'l'}}" style="height:{{item.h}}%"></view></view>
+      </view>
+
+      <view class="card" wx:if="{{replay}}"><view class="sec">录像数据</view><view class="muted">{{replay}}</view></view>
+
+      <view class="card" wx:if="{{pos.length}}">
+        <view class="sec">各号位</view>
+        <view class="kv" wx:for="{{pos}}" wx:key="k"><text>{{item.k}}</text><text class="muted">{{item.g}} 场 · {{item.wr}}</text></view>
+      </view>
+
+      <view class="card" wx:if="{{heroes.length}}">
+        <view class="sec">常用英雄</view>
+        <view class="kv" wx:for="{{heroes}}" wx:key="h"><text>{{item.h}}</text><text class="muted">{{item.g}} 场 · {{item.wr}}</text></view>
+      </view>
+
+      <view class="card" wx:if="{{mates.length}}">
+        <view class="sec">最佳队友 <text class="muted">（同队 ≥3 场）</text></view>
+        <view class="kv" wx:for="{{mates}}" wx:key="pid" data-pid="{{item.pid}}" bindtap="openPlayer"><text class="accent">{{item.name}}</text><text class="muted">{{item.g}} 场 · {{item.wr}}</text></view>
+      </view>
+
+      <view class="card" wx:if="{{nemesis.length}}">
+        <view class="sec">克星 <text class="muted">（交手 ≥3 场，我方胜率最低）</text></view>
+        <view class="kv" wx:for="{{nemesis}}" wx:key="pid" data-pid="{{item.pid}}" bindtap="openPlayer"><text class="accent">{{item.name}}</text><text class="muted">{{item.g}} 场 · 我方 {{item.wr}}</text></view>
+      </view>
+
+      <view class="card">
+        <view class="sec">最近 {{recent.length}} 场</view>
+        <view class="kv" wx:for="{{recent}}" wx:key="id">
+          <text><text class="{{item.won ? 'win' : 'lose'}}">{{item.won ? '胜' : '负'}}</text> {{item.hero}}<text class="muted" wx:if="{{item.pos}}"> {{item.pos}}号位</text></text>
+          <text class="muted">{{item.kda}} · {{item.side}} · {{item.date}}</text>
+        </view>
+      </view>
+    </block>
+  </block>
+</view>

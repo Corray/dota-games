@@ -1,0 +1,7 @@
+.prow { display: flex; align-items: center; padding: 18rpx 8rpx; border-bottom: 1px solid #1f252e; }
+.no { width: 56rpx; color: #8b93a1; font-size: 26rpx; }
+.no.top { color: #e0a83a; font-weight: 700; }
+.name { font-size: 30rpx; font-weight: 600; max-width: 300rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bdg { margin-left: 8rpx; font-size: 24rpx; }
+.score { text-align: right; width: 110rpx; }
+.score .v { font-size: 32rpx; font-weight: 600; color: #e0a83a; }

@@ -7,3 +7,10 @@ dota-records-*.json
 # Atlas 版云同步接口：依赖与密钥不进仓库
 server/node_modules/
 server/.env
+
+# 小程序：依赖、预览二维码、开发者工具的本机配置不进仓库（上传密钥本来就放在仓库外）
+mp/node_modules
+mp/cloudfunctions/*/node_modules/
+mp/preview.png
+mp/project.private.config.json
+*.key

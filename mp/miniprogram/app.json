@@ -1,0 +1,23 @@
+{
+  "pages": ["pages/rank/rank", "pages/matches/matches", "pages/player/player"],
+  "window": {
+    "navigationBarBackgroundColor": "#0e1115",
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "Dota 内战记录",
+    "backgroundColor": "#0e1115",
+    "backgroundTextStyle": "light"
+  },
+  "tabBar": {
+    "color": "#8b93a1",
+    "selectedColor": "#e0a83a",
+    "backgroundColor": "#161a20",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/rank/rank", "text": "排行" },
+      { "pagePath": "pages/matches/matches", "text": "比赛" }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

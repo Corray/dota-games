@@ -1,0 +1,13 @@
+{
+  "name": "dota-games-mp-tools",
+  "private": true,
+  "description": "小程序部署工具（miniprogram-ci），不会被打包进小程序",
+  "scripts": {
+    "sync": "node sync-core.js",
+    "envs": "node deploy.js envs",
+    "func": "node deploy.js func",
+    "preview": "node deploy.js preview",
+    "upload": "node deploy.js upload"
+  },
+  "devDependencies": { "miniprogram-ci": "^2.1.14" }
+}

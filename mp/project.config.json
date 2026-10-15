@@ -1,0 +1,19 @@
+{
+  "appid": "wxebdbfa7bf41143c2",
+  "projectname": "dota-games-mp",
+  "description": "Dota 2 内战记录 · 微信小程序（只读第一期）",
+  "compileType": "miniprogram",
+  "miniprogramRoot": "miniprogram/",
+  "cloudfunctionRoot": "cloudfunctions/",
+  "libVersion": "3.4.0",
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "urlCheck": true,
+    "uglifyFileName": false,
+    "packNpmManually": false
+  },
+  "packOptions": { "ignore": [], "include": [] }
+}

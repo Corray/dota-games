@@ -1,0 +1,21 @@
+page { background: #0e1115; color: #e6e9ef; font-size: 28rpx; font-family: -apple-system, "PingFang SC", sans-serif; }
+.wrap { padding: 20rpx 24rpx 40rpx; }
+.muted { color: #8b93a1; font-size: 24rpx; }
+.accent { color: #e0a83a; }
+.win { color: #7fb135; } .lose { color: #d0463b; }
+.card { background: #161a20; border: 1px solid #2a313c; border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 20rpx; }
+.row { display: flex; align-items: center; }
+.between { justify-content: space-between; }
+.grow { flex: 1; min-width: 0; }
+.tiles { display: flex; flex-wrap: wrap; margin: 0 -8rpx 12rpx; }
+.tile { width: calc(33.33% - 16rpx); margin: 8rpx; background: #161a20; border: 1px solid #2a313c; border-radius: 14rpx; padding: 16rpx; box-sizing: border-box; }
+.tile .k { color: #8b93a1; font-size: 22rpx; } .tile .v { font-size: 36rpx; font-weight: 600; margin: 4rpx 0; } .tile .s { color: #8b93a1; font-size: 20rpx; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12rpx; margin-bottom: 16rpx; }
+.chip { padding: 8rpx 20rpx; border-radius: 999rpx; background: #1d222a; border: 1px solid #2a313c; color: #e6e9ef; font-size: 24rpx; }
+.chip.on { border-color: #e0a83a; color: #e0a83a; }
+.input { background: #1d222a; border: 1px solid #2a313c; border-radius: 12rpx; padding: 10rpx 20rpx; color: #e6e9ef; font-size: 26rpx; }
+.rank { display: inline-block; padding: 2rpx 10rpx; border-radius: 8rpx; background: #1d222a; color: #c9b27a; font-size: 22rpx; margin-left: 10rpx; }
+.empty { text-align: center; color: #8b93a1; padding: 60rpx 0; }
+.err { color: #d0463b; padding: 20rpx 0; }
+.more { text-align: center; color: #8b93a1; padding: 20rpx 0; font-size: 24rpx; }
+.sec { font-size: 30rpx; font-weight: 600; margin: 12rpx 0 12rpx; }
