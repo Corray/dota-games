@@ -23,7 +23,7 @@ Page({
     const s = v.st.players[this.pid], sc = v.scores[this.pid], r = v.rs.players[this.pid];
     const scopeTxt = this.scoped && (f.from || f.to || f.league) ? `统计范围：${S.scopeTitle(v)}` : '全部比赛';
     const base = { ok: true, name: p.name, rank: p.rank + (p.stars ? ' ' + p.stars : ''), scopeTxt,
-      hasAcc: !!p.accountId, posTxt: (p.positions || []).map(i => C.POS_SHORT[i]).join(' ') || '-', heroTxt: (p.heroes || []).join('、') || '-' };
+      hasAcc: !!p.accountId, mmr: p.mmr || '', posTxt: (p.positions || []).map(i => C.POS_SHORT[i]).join(' ') || '-', heroTxt: (p.heroes || []).join('、') || '-' };
     if (!s) return this.setData({ ...base, none: true });
 
     const sp = n => Math.round(n * 100);
@@ -35,13 +35,14 @@ Page({
       mates: rel(s.mates), opps: rel(s.opps),
     };
     this._hist = s.eloHist;
-    const so = v.so, wsum = (so.wRank + so.wElo + so.wKda + so.wHero) || 1;
+    const so = v.so, wsum = C.scoreWsum(so);
     this.setData({
       ...base, none: false,
       badges: (v.badges[this.pid] || []).map(b => ({ t: `${b.icon} ${b.name}`, d: b.detail })),
       tiles: [
         { k: '总场次', v: s.g, s: `${s.w} 胜 ${s.g - s.w} 负` },
         { k: '胜率', v: pct(s.w, s.g), s: s.streak > 0 ? `当前 ${s.streak} 连胜` : s.streak < 0 ? `当前 ${-s.streak} 连败` : '' },
+        { k: '积分', v: s.pts, s: `${s.w}×${C.PTS_WIN} + ${s.g - s.w}×${C.PTS_LOSS}` },
         { k: '天辉', v: pct(s.rw, s.rg), s: `${s.rw}/${s.rg}` },
         { k: '夜魇', v: pct(s.dw, s.dg), s: `${s.dw}/${s.dg}` },
         { k: 'Elo', v: Math.round(s.elo), s: `最高 ${Math.round(s.eloPeak)} · 最低 ${Math.round(s.eloLow)}` },
@@ -54,6 +55,7 @@ Page({
         { k: 'Elo', v: sp(sc.elo), w: Math.round(so.wElo / wsum * 100), s: `Elo ${Math.round(sc.eloRaw)}` },
         { k: 'KDA', v: sp(sc.kda), w: Math.round(so.wKda / wsum * 100), s: sc.kdaRel != null ? `同号位平均的 ${sc.kdaRel.toFixed(2)} 倍` : '' },
         { k: '英雄', v: sp(sc.hero), w: Math.round(so.wHero / wsum * 100) },
+        { k: '积分', v: sp(sc.pts), w: Math.round((so.wPts || 0) / wsum * 100), s: `${sc.ptsRaw} 分，范围内最高 ${sc.ptsMax}` },
       ],
       conf: `样本置信度 ${Math.round(sc.conf * 100)}%（${s.g} 场，可信场次 ${so.trust}）`,
       closeTxt: s.closeG ? `胶着局（击杀差 ≤5）${s.closeW} 胜 ${s.closeG - s.closeW} 负` : '',

@@ -25,11 +25,12 @@
     <view class="wrow"><text>对手加权（Elo）</text><input type="number" data-k="wElo" value="{{w.wElo}}" bindblur="onW" bindconfirm="onW" /></view>
     <view class="wrow"><text>KDA</text><input type="number" data-k="wKda" value="{{w.wKda}}" bindblur="onW" bindconfirm="onW" /></view>
     <view class="wrow"><text>英雄</text><input type="number" data-k="wHero" value="{{w.wHero}}" bindblur="onW" bindconfirm="onW" /></view>
+    <view class="wrow"><text>积分（胜 +10 / 负 +2）</text><input type="number" data-k="wPts" value="{{w.wPts}}" bindblur="onW" bindconfirm="onW" /></view>
     <view class="wrow"><text>英雄口径</text><picker range="{{heroModes}}" range-key="t" value="{{heroModeIdx}}" bindchange="onHeroMode"><view class="accent">{{heroModes[heroModeIdx].t}} ▾</view></picker></view>
     <view class="wrow"><text>比分差修正</text><switch checked="{{w.mov !== false}}" bindchange="onMov" color="#e0a83a" /></view>
     <view class="wrow"><text>可信场次</text><input type="number" data-k="trust" value="{{w.trust}}" bindblur="onW" bindconfirm="onW" /></view>
     <view class="row between" style="margin-top:12rpx"><text class="muted">权重和 {{wsum}}</text><view class="chip" bindtap="resetW">重置默认</view></view>
-    <view class="muted" style="margin-top:8rpx">比分差修正：击杀差越大 Elo 步长越大（0 分差 ×0.7，40+ 分差 ×1.3）。可信场次：打到这个场次时 KDA / 英雄两项只信一半，其余向中间收缩。</view>
+    <view class="muted" style="margin-top:8rpx">比分差修正：击杀差越大 Elo 步长越大（0 分差 ×0.7，40+ 分差 ×1.3）。可信场次：打到这个场次时 KDA / 英雄两项只信一半，其余向中间收缩。积分：本人积分 ÷ 范围内最高积分，多打多得。</view>
   </view>
 
   <!-- 概览 -->
@@ -57,6 +58,7 @@
       </view>
       <view class="grid">
         <view><text class="muted">战绩 </text>{{item.g}} 场 <text class="win">{{item.w}}</text>/<text class="lose">{{item.l}}</text></view>
+        <view><text class="muted">积分 </text><text class="b accent">{{item.pts}}</text></view>
         <view><text class="muted">胜率 </text><text class="b">{{item.wr}}</text></view>
         <view><text class="muted">天辉 </text>{{item.rad}}</view>
         <view><text class="muted">夜魇 </text>{{item.dire}}</view>

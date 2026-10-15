@@ -8,3 +8,4 @@
 .gw { white-space: nowrap; margin-left: 12rpx; }
 .track { height: 6rpx; background: #1d222a; border-radius: 3rpx; margin-top: 10rpx; overflow: hidden; }
 .fill { height: 100%; background: #e0a83a; opacity: .7; }
+.mmr { margin-left: 8rpx; font-size: 20rpx; padding: 2rpx 8rpx; border-radius: 6rpx; background: #1d2a36; color: #7fb3e0; }

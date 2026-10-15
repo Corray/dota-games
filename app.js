@@ -84,6 +84,7 @@ const rankBadge = p => `<span class="rank ${rankCls(p.rank)}">${esc(p.rank)}${p.
 const playerMap = () => new Map(state.players.map(p => [p.id, p]));
 const pname = (P, pid) => P.get(pid)?.name ?? '(已删除)';
 const rankIdx = p => RANKS.indexOf(p.rank) * 10 + (p.stars || 0);
+const parseMmr = v => { const n = Math.round(Number(String(v ?? '').replace(/[^\d.]/g, ''))); return n > 0 && n <= 20000 ? n : null; };   // 真实天梯分，留空 / 不合理 = 不填
 
 let toastTimer;
 function toast(msg, type = '') {
@@ -204,6 +205,7 @@ const hooks = { renderTab: {}, afterSaveMatch: [] };
       positions: $$('#p-positions input:checked').map(i => Number(i.value)),
       heroes: [...ui.heroTags], note: $('#p-note').value.trim(),
       accountId: parseAccountId($('#p-account').value),
+      mmr: parseMmr($('#p-mmr').value),
     };
     if (data.accountId && state.players.some(p => p.accountId === data.accountId && p.id !== ui.editingPlayer)) return toast('该 Steam ID 已绑定到其他选手', 'err');
     if (ui.editingPlayer) {
@@ -250,7 +252,8 @@ const hooks = { renderTab: {}, afterSaveMatch: [] };
       const positions = (parts[2] || '').match(/[1-5]/g)?.map(Number) || [];
       const heroes = (parts[3] || '').split(/[\/、\s]+/).map(s => s.trim()).filter(Boolean);
       const accountId = parseAccountId(parts[4] || '');
-      state.players.push({ id: uid(), createdAt: Date.now(), name, rank, stars, positions: [...new Set(positions)], heroes, note: '', accountId });
+      const mmr = parseMmr(parts[5] || '');
+      state.players.push({ id: uid(), createdAt: Date.now(), name, rank, stars, positions: [...new Set(positions)], heroes, note: '', accountId, ...(mmr ? { mmr } : {}) });
       added++;
     }
     save(); renderPlayers();
@@ -268,6 +271,7 @@ function startEditPlayer(p) {
   $$('#p-positions input').forEach(i => i.checked = p.positions.includes(Number(i.value)));
   $('#p-note').value = p.note || '';
   $('#p-account').value = p.accountId || '';
+  $('#p-mmr').value = p.mmr || '';
   renderHeroTags();
   $('#player-form-title').textContent = '编辑选手：' + p.name;
   $('#p-submit').textContent = '保存修改';
@@ -292,7 +296,7 @@ function renderPlayers() {
     .filter(p => !q || p.name.toLowerCase().includes(q) || p.rank.includes(q) || p.heroes.some(h => h.includes(q)))
     .map(p => { const s = stats[p.id]; return { p, s, sc: playerScore(s, p, so) }; });
   const { key, dir } = ui.playerSort;
-  const val = r => key === 'score' ? r.sc.score : key === 'g' ? (r.s?.g || 0) : key === 'wr' ? pctNum(r.s?.w || 0, r.s?.g || 0) : key === 'name' ? r.p.name : rankIdx(r.p);
+  const val = r => key === 'score' ? r.sc.score : key === 'pts' ? (r.s?.pts || 0) : key === 'mmr' ? (r.p.mmr || 0) : key === 'g' ? (r.s?.g || 0) : key === 'wr' ? pctNum(r.s?.w || 0, r.s?.g || 0) : key === 'name' ? r.p.name : rankIdx(r.p);
   scored.sort((a, b) => {
     const va = val(a), vb = val(b);
     const c = typeof va === 'string' ? va.localeCompare(vb, 'zh') : va - vb;
@@ -308,6 +312,8 @@ function renderPlayers() {
       <td>${p.positions.map(i => `<span class="pos-chip">${POS_SHORT[i]}</span>`).join('') || '<span class="hint">-</span>'}</td>
       <td class="wrap">${p.heroes.map(h => `<span class="hero-chip">${esc(h)}</span>`).join('') || '<span class="hint">-</span>'}</td>
       <td class="num" title="${scoreTip(sc)}"><strong class="sc-v">${sc.score.toFixed(1)}</strong><span class="bar sc-bar" style="width:${Math.round(sc.raw * 40)}px"></span>${sc.enough ? '' : '<span class="hint sc-thin" title="样本不足，KDA / 英雄向中性收缩">*</span>'}</td>
+      <td class="num">${s ? s.pts : 0}</td>
+      <td class="num">${p.mmr || '<span class="hint">-</span>'}</td>
       <td class="num">${s ? s.g : 0}</td>
       <td class="num">${s ? pct(s.w, s.g) : '-'}</td>
       <td><div class="actions"><button data-act="ladder" data-id="${p.id}" ${p.accountId ? 'title="查看 OpenDota 天梯资料：擅长英雄 / 近期比赛 / 统计"' : 'disabled title="先在「编辑」里填 Steam ID 才能查天梯资料"'}>查看天梯资料</button><button data-act="edit" data-id="${p.id}">编辑</button><button class="danger" data-act="del" data-id="${p.id}">删除</button></div></td>
@@ -792,7 +798,7 @@ let lastStatsRows = [];
     if (ui.statsSort.key === k) ui.statsSort.dir *= -1; else ui.statsSort = { key: k, dir: (k === 'name' || k === 'rank') ? 1 : -1 };
     renderStats();
   });
-  const swIds = { 'sw-rank': 'wRank', 'sw-elo': 'wElo', 'sw-kda': 'wKda', 'sw-hero': 'wHero', 'sw-trust': 'trust', 'sw-mode': 'heroMode' };
+  const swIds = { 'sw-rank': 'wRank', 'sw-elo': 'wElo', 'sw-kda': 'wKda', 'sw-hero': 'wHero', 'sw-pts': 'wPts', 'sw-trust': 'trust', 'sw-mode': 'heroMode' };
   Object.entries(swIds).forEach(([id, key]) => $('#' + id).addEventListener('input', e => {
     const o = loadScoreOpt();
     o[key] = key === 'heroMode' ? e.target.value : Math.max(key === 'trust' ? 1 : 0, Number(e.target.value) || 0);
@@ -806,13 +812,13 @@ let lastStatsRows = [];
   $('#hero-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#lane-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#btn-copy-md').addEventListener('click', async () => {
-    const head = ['选手', '段位', '评分', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
+    const head = ['选手', '段位', '评分', '积分', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
     const md = ['| ' + head.join(' | ') + ' |', '|' + head.map(() => '---').join('|') + '|', ...lastStatsRows.map(r => '| ' + r.join(' | ') + ' |')].join('\n');
     try { await navigator.clipboard.writeText(md); toast('已复制 Markdown 表格', 'ok'); }
     catch { showModal(`<h2>复制 Markdown</h2><p class="hint">浏览器不允许自动复制，请手动全选复制：</p><textarea rows="14" style="width:100%">${esc(md)}</textarea>`); }
   });
   $('#btn-csv').addEventListener('click', () => {
-    const head = ['选手', '段位', '评分', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
+    const head = ['选手', '段位', '评分', '积分', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
     const csv = '\uFEFF' + [head, ...lastStatsRows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
@@ -882,13 +888,14 @@ function filteredMatches() {
 
 // 评分列的悬停明细：拆出四项各自贡献了多少分
 const scoreTip = sc => {
-  const o = loadScoreOpt(), wsum = (o.wRank + o.wElo + o.wKda + o.wHero) || 1;
+  const o = loadScoreOpt(), wsum = DotaCore.scoreWsum(o);
   const part = (label, w, v, note = '') => `${label} ${(v * 100).toFixed(0)}分 ×${w} → ${(w * v / wsum * 100).toFixed(1)}${note ? '　' + note : ''}`;
   return [
     part('段位', o.wRank, sc.rank),
     part('对手加权', o.wElo, sc.elo, `Elo ${Math.round(sc.eloRaw)}${sc.win != null ? ` · 胜率 ${(sc.win * 100).toFixed(0)}%` : ''}${sc.closeG ? ` · 胶着局 ${sc.closeW}/${sc.closeG}` : ''}${o.mov === false ? ' · 未用比分差修正' : ''}`),
     part('KDA', o.wKda, sc.kda, sc.kdaRel != null ? `${sc.kdaRaw.toFixed(2)}，同号位平均 ${sc.kdaExp.toFixed(2)} 的 ${sc.kdaRel.toFixed(2)} 倍` : '无 KDA 记录'),
     part('英雄', o.wHero, sc.hero),
+    part('积分', o.wPts || 0, sc.pts, `${sc.ptsRaw} 分，范围内最高 ${sc.ptsMax}（胜 +${DotaCore.PTS_WIN} / 负 +${DotaCore.PTS_LOSS}）`),
     `样本置信 ${(sc.conf * 100).toFixed(0)}%（${sc.g} 场，可信场次 ${o.trust}）${sc.conf < 0.5 ? '，KDA / 英雄向中性收缩' : ''}`,
   ].join('\n');
 };
@@ -900,9 +907,9 @@ function renderStats() {
   const st = computeStats(ms);
   const minG = Math.max(1, Number($('#sf-min').value) || 1);
   const so = loadScoreOpt();
-  $('#sw-rank').value = so.wRank; $('#sw-elo').value = so.wElo; $('#sw-kda').value = so.wKda; $('#sw-hero').value = so.wHero;
+  $('#sw-rank').value = so.wRank; $('#sw-elo').value = so.wElo; $('#sw-kda').value = so.wKda; $('#sw-hero').value = so.wHero; $('#sw-pts').value = so.wPts ?? 0;
   $('#sw-mode').value = so.heroMode; $('#sw-trust').value = so.trust; $('#sw-mov').checked = so.mov !== false;
-  $('#sw-sum').textContent = `权重和 ${so.wRank + so.wElo + so.wKda + so.wHero}（按比例归一，不必凑 100）`;
+  $('#sw-sum').textContent = `权重和 ${DotaCore.scoreWsum(so)}（按比例归一，不必凑 100）`;
 
   // 概览
   const rows = Object.values(st.players).filter(s => s.g >= minG && P.has(s.pid));
@@ -918,15 +925,8 @@ function renderStats() {
     ['热门英雄', topHero ? esc(topHero.hero) : '-', topHero ? `${topHero.g} 场 · ${pct(topHero.w, topHero.g)}` : '记录英雄后显示'],
   ].map(([k, v, s]) => `<div class="stat-tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('');
 
-  // 选手排行
-  const data = rows.map(s => {
-    const p = P.get(s.pid);
-    return { pid: s.pid, name: p.name, rank: rankIdx(p), rankHtml: rankBadge(p), g: s.g, w: s.w, l: s.g - s.w, wr: pctNum(s.w, s.g), rwr: pctNum(s.rw, s.rg), dwr: pctNum(s.dw, s.dg),
-      rg: s.rg, rw: s.rw, dg: s.dg, dw: s.dw, streak: s.streak, kda: s.kdaG ? (s.k + s.a) / Math.max(1, s.d) : -1, kdaStr: s.kdaG ? `${(s.k / s.kdaG).toFixed(1)}/${(s.d / s.kdaG).toFixed(1)}/${(s.a / s.kdaG).toFixed(1)}` : '',
-      pos: Object.entries(s.pos).sort((a, b) => b[1].g - a[1].g).slice(0, 2).map(([k, v]) => `${POS_SHORT[k]} ${v.g}场`).join('，'),
-      hero: Object.entries(s.heroes).sort((a, b) => b[1].g - a[1].g).slice(0, 3).map(([k, v]) => `${k} ${v.w}/${v.g}`).join('，'),
-      sc: playerScore(s, p, so) };
-  }).map(r => ({ ...r, score: r.sc.score }));
+  // 选手排行：行数据在 core.js（与战报 / 小程序共用），这里只补段位徽章
+  const data = DotaCore.statsRows(rows, P, so).map(r => ({ ...r, rankHtml: rankBadge(P.get(r.pid)) }));
   const { key, dir } = ui.statsSort;
   data.sort((a, b) => {
     const va = a[key], vb = b[key];
@@ -939,6 +939,7 @@ function renderStats() {
     <td><button class="name-btn" data-pid="${r.pid}">${esc(r.name)}</button></td>
     <td>${r.rankHtml}</td>
     <td class="num" title="${scoreTip(r.sc)}"><strong class="sc-v">${r.score.toFixed(1)}</strong><span class="bar sc-bar" style="width:${Math.round(r.sc.raw * 40)}px"></span>${r.sc.enough ? '' : '<span class="hint sc-thin">*</span>'}</td>
+    <td class="num">${r.pts}</td>
     <td class="num">${r.g}</td><td class="num win">${r.w}</td><td class="num loss">${r.l}</td>
     <td class="num"><strong>${pct(r.w, r.g)}</strong><span class="bar" style="width:${Math.round(r.wr * 40)}px"></span></td>
     <td class="num">${r.rg ? `${pct(r.rw, r.rg)} <span class="hint">(${r.rg})</span>` : '-'}</td>
@@ -947,8 +948,8 @@ function renderStats() {
     <td>${esc(r.pos) || '-'}</td>
     <td class="wrap">${esc(r.hero) || '-'}</td>
     <td class="num">${streakHtml(r.streak)}</td>
-  </tr>`).join('') : `<tr><td colspan="12" class="empty">没有符合条件的数据</td></tr>`;
-  lastStatsRows = data.map(r => [r.name, `${P.get(r.pid).rank}${P.get(r.pid).stars || ''}`, r.score.toFixed(1), r.g, r.w, r.l, pct(r.w, r.g), r.rg ? `${pct(r.rw, r.rg)}(${r.rg})` : '-', r.dg ? `${pct(r.dw, r.dg)}(${r.dg})` : '-', r.kda >= 0 ? `${r.kda.toFixed(2)} (${r.kdaStr})` : '-', r.pos || '-', r.hero || '-', r.streak > 0 ? `${r.streak}连胜` : r.streak < 0 ? `${-r.streak}连败` : '-']);
+  </tr>`).join('') : `<tr><td colspan="14" class="empty">没有符合条件的数据</td></tr>`;
+  lastStatsRows = data.map(r => [r.name, `${P.get(r.pid).rank}${P.get(r.pid).stars || ''}`, r.score.toFixed(1), r.pts, r.g, r.w, r.l, pct(r.w, r.g), r.rg ? `${pct(r.rw, r.rg)}(${r.rg})` : '-', r.dg ? `${pct(r.dw, r.dg)}(${r.dg})` : '-', r.kda >= 0 ? `${r.kda.toFixed(2)} (${r.kdaStr})` : '-', r.pos || '-', r.hero || '-', r.streak > 0 ? `${r.streak}连胜` : r.streak < 0 ? `${-r.streak}连败` : '-']);
 
   // 英雄
   const heroes = Object.values(st.heroes).sort((a, b) => b.g - a.g || pctNum(b.w, b.g) - pctNum(a.w, a.g));
@@ -1084,10 +1085,11 @@ function showPlayerDetail(pid) {
   showModal(`
     <h2>${esc(p.name)} ${rankBadge(p)}</h2>
     ${myBadges.length ? `<div class="badge-row">${badgesHtml(myBadges, true)}</div>` : ''}
-    <div class="hint">擅长位置：${p.positions.map(i => POS_SHORT[i]).join(' ') || '-'} ｜ 擅长英雄：${p.heroes.map(esc).join('、') || '-'}${p.note ? ' ｜ ' + esc(p.note) : ''} <button type="button" class="mini" id="pd-recalc" title="按下面的位置 / 英雄统计重置擅长位置和擅长英雄">按战绩重置</button></div>
+    <div class="hint">${p.mmr ? `MMR <b>${p.mmr}</b> ｜ ` : ''}擅长位置：${p.positions.map(i => POS_SHORT[i]).join(' ') || '-'} ｜ 擅长英雄：${p.heroes.map(esc).join('、') || '-'}${p.note ? ' ｜ ' + esc(p.note) : ''} <button type="button" class="mini" id="pd-recalc" title="按下面的位置 / 英雄统计重置擅长位置和擅长英雄">按战绩重置</button></div>
     <div class="overview" style="margin-top:12px">
       <div class="stat-tile"><div class="k">总场次</div><div class="v">${st.g}</div><div class="s">${st.w} 胜 ${st.g - st.w} 负</div></div>
       <div class="stat-tile"><div class="k">胜率</div><div class="v">${pct(st.w, st.g)}</div><div class="s">${st.streak > 0 ? `当前 ${st.streak} 连胜` : st.streak < 0 ? `当前 ${-st.streak} 连败` : ''}</div></div>
+      <div class="stat-tile" title="内战积分：赢一场 +${DotaCore.PTS_WIN}，输一场 +${DotaCore.PTS_LOSS}"><div class="k">积分</div><div class="v">${st.pts}</div><div class="s">${st.w}×${DotaCore.PTS_WIN} + ${st.g - st.w}×${DotaCore.PTS_LOSS}</div></div>
       <div class="stat-tile"><div class="k">天辉</div><div class="v">${pct(st.rw, st.rg)}</div><div class="s">${st.rw}/${st.rg}</div></div>
       <div class="stat-tile"><div class="k">夜魇</div><div class="v">${pct(st.dw, st.dg)}</div><div class="s">${st.dw}/${st.dg}</div></div>
       <div class="stat-tile" title="对手加权 Elo：所有人从 1500 起步，赢强队加得多、输弱队扣得多"><div class="k">Elo</div><div class="v">${Math.round(st.elo)}</div><div class="s">最高 ${Math.round(st.eloPeak)} · 最低 ${Math.round(st.eloLow)}</div></div>

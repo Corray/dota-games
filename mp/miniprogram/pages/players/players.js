@@ -1,7 +1,7 @@
 // 选手名单（对应网页「选手名单」页右侧表格；按全部比赛统计，和网页一致）
 const S = require('../../utils/store.js');
 const STEP = 40;
-const SORTS = [{ k: 'score', t: '评分' }, { k: 'g', t: '场次' }, { k: 'wr', t: '胜率' }, { k: 'rank', t: '段位' }, { k: 'name', t: '昵称' }];
+const SORTS = [{ k: 'rank', t: '段位' }, { k: 'score', t: '评分' }, { k: 'pts', t: '积分' }, { k: 'mmr', t: 'MMR' }, { k: 'g', t: '场次' }, { k: 'wr', t: '胜率' }, { k: 'name', t: '昵称' }];
 
 Page({
   data: { loading: true, err: '', offline: '', q: '', sorts: SORTS, sort: 'rank', dir: -1, rows: [], total: 0, all: 0, shown: STEP, updated: '' },
@@ -30,9 +30,9 @@ Page({
     const q = this.data.q.trim().toLowerCase();
     const { sort, dir } = this.data;
     const list = d.players
-      .filter(p => !q || p.name.toLowerCase().includes(q) || (p.rank || '').includes(q) || (p.heroes || []).some(h => h.includes(q)))
+      .filter(p => !q || p.name.toLowerCase().includes(q) || (p.rank || '').includes(q) || (p.heroes || []).some(h => h.includes(q)) || String(p.mmr || '') === q)
       .map(p => { const s = v.st.players[p.id], sc = v.scores[p.id]; return { p, s, sc }; });
-    const val = r => sort === 'score' ? r.sc.score : sort === 'g' ? (r.s ? r.s.g : 0) : sort === 'wr' ? C.pctNum(r.s ? r.s.w : 0, r.s ? r.s.g : 0) : sort === 'name' ? r.p.name : C.rankIdx(r.p);
+    const val = r => sort === 'score' ? r.sc.score : sort === 'pts' ? (r.s ? r.s.pts : 0) : sort === 'mmr' ? (r.p.mmr || 0) : sort === 'g' ? (r.s ? r.s.g : 0) : sort === 'wr' ? C.pctNum(r.s ? r.s.w : 0, r.s ? r.s.g : 0) : sort === 'name' ? r.p.name : C.rankIdx(r.p);
     list.sort((a, b) => {
       const va = val(a), vb = val(b);
       const c = typeof va === 'string' ? va.localeCompare(vb, 'zh') : va - vb;
@@ -43,7 +43,7 @@ Page({
       pos: (p.positions || []).map(i => C.POS_SHORT[i]).filter(Boolean),
       heroes: (p.heroes || []).slice(0, 6),
       score: sc.score.toFixed(1), thin: !sc.enough, bar: Math.round(sc.raw * 100),
-      g: s ? s.g : 0, wr: s ? C.pct(s.w, s.g) : '-',
+      g: s ? s.g : 0, wr: s ? C.pct(s.w, s.g) : '-', pts: s ? s.pts : 0, mmr: p.mmr || '',
       badges: (v.badges[p.id] || []).map(b => b.icon).join(''),
     }));
     this.setData({ rows, total: list.length, all: d.players.length });

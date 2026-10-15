@@ -42,7 +42,7 @@ const slimReplay = rp => rp && rp.heroes ? { leagueId: rp.leagueId || 0, heroes:
 const slimSide = arr => (arr || []).map(s => ({ pid: s.pid, pos: s.pos || 0, hero: s.hero || '', kda: s.kda }));
 function slim(data) {
   return {
-    players: (data.players || []).map(p => ({ id: p.id, name: p.name, rank: p.rank, stars: p.stars, positions: p.positions || [], heroes: p.heroes || [], accountId: p.accountId || null })),
+    players: (data.players || []).map(p => ({ id: p.id, name: p.name, rank: p.rank, stars: p.stars, positions: p.positions || [], heroes: p.heroes || [], accountId: p.accountId || null, mmr: p.mmr || null })),
     matches: (data.matches || []).map(m => ({
       id: m.id, date: m.date, winner: m.winner, duration: m.duration, createdAt: m.createdAt, note: m.note || '',
       score: m.score, leagueId: m.leagueId, radiant: slimSide(m.radiant), dire: slimSide(m.dire), replay: slimReplay(m.replay),

@@ -3,7 +3,7 @@
   <block wx:if="{{ok}}">
     <view class="card">
       <view class="row between">
-        <view class="row"><text class="pname">{{name}}</text><text class="rank">{{rank}}</text></view>
+        <view class="row"><text class="pname">{{name}}</text><text class="rank">{{rank}}</text><text class="mmr" wx:if="{{mmr}}">MMR {{mmr}}</text></view>
         <view wx:if="{{!none}}"><text class="sv">{{score}}</text><text class="muted" wx:if="{{thin}}">*</text><view class="muted" style="text-align:right">评分</view></view>
       </view>
       <view class="muted">擅长位置 {{posTxt}} ｜ 擅长英雄 {{heroTxt}}</view>

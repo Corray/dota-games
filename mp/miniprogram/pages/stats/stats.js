@@ -5,7 +5,7 @@ const C = S.core;
 const pct = C.pct, pctNum = C.pctNum;
 const STEP = 40;
 const SECS = [{ k: 'rank', t: '排行' }, { k: 'badge', t: '称号' }, { k: 'elo', t: 'Elo 走势' }, { k: 'pred', t: '预测回看' }, { k: 'lane', t: '对线节奏' }, { k: 'hero', t: '英雄' }, { k: 'duo', t: '搭档' }];
-const RSORTS = [{ k: 'wr', t: '胜率' }, { k: 'score', t: '评分' }, { k: 'g', t: '场次' }, { k: 'w', t: '胜' }, { k: 'l', t: '负' }, { k: 'rwr', t: '天辉' }, { k: 'dwr', t: '夜魇' }, { k: 'kda', t: 'KDA' }, { k: 'streak', t: '连胜' }, { k: 'rank', t: '段位' }, { k: 'name', t: '昵称' }];
+const RSORTS = [{ k: 'wr', t: '胜率' }, { k: 'score', t: '评分' }, { k: 'pts', t: '积分' }, { k: 'g', t: '场次' }, { k: 'w', t: '胜' }, { k: 'l', t: '负' }, { k: 'rwr', t: '天辉' }, { k: 'dwr', t: '夜魇' }, { k: 'kda', t: 'KDA' }, { k: 'streak', t: '连胜' }, { k: 'rank', t: '段位' }, { k: 'name', t: '昵称' }];
 const HERO_MODES = [{ v: 'main', t: '主力英雄战绩' }, { v: 'pool', t: '英雄池广度' }, { v: 'both', t: '两者各半' }];
 const streakTxt = n => n > 0 ? `${n} 连胜` : n < 0 ? `${-n} 连败` : '-';
 
@@ -101,7 +101,7 @@ Page({
     const rows = data.slice(0, this.data.shown).map((r, i) => {
       const p = P.get(r.pid);
       return { pid: r.pid, no: i + 1, name: r.name, rank: p.rank + (p.stars ? ' ' + p.stars : ''), score: r.score.toFixed(1), thin: !r.sc.enough,
-        g: r.g, w: r.w, l: r.l, wr: pct(r.w, r.g), wrBar: Math.round(r.wr * 100),
+        g: r.g, w: r.w, l: r.l, wr: pct(r.w, r.g), wrBar: Math.round(r.wr * 100), pts: r.pts,
         rad: r.rg ? `${pct(r.rw, r.rg)}（${r.rg}）` : '-', dire: r.dg ? `${pct(r.dw, r.dg)}（${r.dg}）` : '-',
         kda: r.kda >= 0 ? r.kda.toFixed(2) : '-', kdaStr: r.kdaStr, pos: r.pos || '-', hero: r.hero || '-',
         streak: streakTxt(r.streak), scls: r.streak > 0 ? 'win' : r.streak < 0 ? 'lose' : 'muted',
@@ -214,16 +214,16 @@ Page({
   // ---------- 评分权重（存本机） ----------
   toggleW() {
     const so = S.scoreOpt();
-    this.setData({ showW: !this.data.showW, w: { ...so }, heroModeIdx: Math.max(0, HERO_MODES.findIndex(m => m.v === so.heroMode)), wsum: so.wRank + so.wElo + so.wKda + so.wHero });
+    this.setData({ showW: !this.data.showW, w: { ...so }, heroModeIdx: Math.max(0, HERO_MODES.findIndex(m => m.v === so.heroMode)), wsum: C.scoreWsum(so) });
   },
   onW(e) {
     const k = e.currentTarget.dataset.k, n = Math.max(0, Math.min(k === 'trust' ? 99 : 100, Number(e.detail.value) || 0));
     const so = { ...S.scoreOpt(), [k]: k === 'trust' ? Math.max(1, n) : n };
-    S.saveScoreOpt(so); this.setData({ w: so, wsum: so.wRank + so.wElo + so.wKda + so.wHero }); this.render();
+    S.saveScoreOpt(so); this.setData({ w: so, wsum: C.scoreWsum(so) }); this.render();
   },
   onHeroMode(e) { const i = Number(e.detail.value); const so = { ...S.scoreOpt(), heroMode: HERO_MODES[i].v }; S.saveScoreOpt(so); this.setData({ w: so, heroModeIdx: i }); this.render(); },
   onMov(e) { const so = { ...S.scoreOpt(), mov: e.detail.value }; S.saveScoreOpt(so); this.setData({ w: so }); this.render(); },
-  resetW() { S.resetScoreOpt(); const so = S.scoreOpt(); this.setData({ w: so, heroModeIdx: 0, wsum: so.wRank + so.wElo + so.wKda + so.wHero }); this.render(); wx.showToast({ title: '已恢复默认权重', icon: 'none' }); },
+  resetW() { S.resetScoreOpt(); const so = S.scoreOpt(); this.setData({ w: so, heroModeIdx: 0, wsum: C.scoreWsum(so) }); this.render(); wx.showToast({ title: '已恢复默认权重', icon: 'none' }); },
 
   open(e) { const pid = e.currentTarget.dataset.pid; if (pid) wx.navigateTo({ url: `/pages/player/player?pid=${pid}&scope=stats` }); },
 });

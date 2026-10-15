@@ -44,6 +44,10 @@ const CLOSE_MARGIN = 5;    // 双方击杀差 ≤ 5 记为胶着局
 // 比分差 → Elo 步长系数：0 分差 0.7，20 分差 1.0，40+ 分差 1.3。碾压说明实力差距明确，多加多扣；胶着说明接近，少动
 const movFactor = sc => sc ? 0.7 + 0.6 * Math.min(Math.abs(sc[0] - sc[1]), 40) / 40 : 1;
 
+// ============ 内战积分：赢一场 +10，输一场 +2（只看筛选范围内的比赛） ============
+const PTS_WIN = 10, PTS_LOSS = 2;
+const ptsOf = (w, g) => w * PTS_WIN + (g - w) * PTS_LOSS;
+
 function computeStats(matches, so = SCORE_DEF) {
   const useMov = so.mov !== false;
   const ps = {}, heroes = {}, duos = {};
@@ -118,7 +122,11 @@ function computeStats(matches, so = SCORE_DEF) {
   for (const st of Object.values(ps)) {
     st.eloPeak = st.eloHist.reduce((a, h) => Math.max(a, h.elo), ELO_BASE);
     st.eloLow = st.eloHist.reduce((a, h) => Math.min(a, h.elo), ELO_BASE);
+    st.pts = ptsOf(st.w, st.g);
   }
+  // 积分归一要用范围内最高分：挂到每个人身上，playerScore 只拿得到单人统计
+  const ptsMax = Object.values(ps).reduce((a, s) => Math.max(a, s.pts), 0);
+  for (const st of Object.values(ps)) st.ptsMax = ptsMax;
   return { players: ps, heroes, duos, total: matches.length, radiantWins, avgDuration: durN ? durSum / durN : null, elo, posKda, preds, seqTotal: seq };
 }
 
@@ -254,7 +262,8 @@ function predictionReport(preds, margin = 0.05) {
 const topKey = (obj, by = 'g') => Object.entries(obj).sort((a, b) => b[1][by] - a[1][by])[0]?.[0];
 
 
-const SCORE_DEF = { wRank: 40, wElo: 30, wKda: 20, wHero: 10, trust: 3, heroMode: 'main', heroTop: 3, poolCap: 12, mov: true };
+const SCORE_DEF = { wRank: 40, wElo: 30, wKda: 20, wHero: 10, wPts: 10, trust: 3, heroMode: 'main', heroTop: 3, poolCap: 12, mov: true };
+const scoreWsum = o => ((o.wRank || 0) + (o.wElo || 0) + (o.wKda || 0) + (o.wHero || 0) + (o.wPts || 0)) || 1;
 
 const ELO_BASE = 1500, ELO_K = 32;
 
@@ -289,10 +298,13 @@ function playerScore(st, p, opt) {
   const kdaRaw = st && st.kdaG ? (st.k + st.a) / Math.max(st.d, 1) : null;
   const kda = shrink(st?.kdaRel != null ? Math.min(st.kdaRel / KDA_REL_CAP, 1) : null);
   const hero = shrink(st ? heroScore(st, o) : null);
-  const wsum = (o.wRank + o.wElo + o.wKda + o.wHero) || 1;
-  const raw = (o.wRank * rank + o.wElo * elo + o.wKda * kda + o.wHero * hero) / wsum;
+  // 积分：本人积分 ÷ 范围内最高积分。和场次强相关（多打多得），不做样本收缩；没打过 = 0
+  const ptsRaw = st ? st.pts || 0 : 0;
+  const pts = st && st.ptsMax ? ptsRaw / st.ptsMax : 0;
+  const wsum = scoreWsum(o);
+  const raw = (o.wRank * rank + o.wElo * elo + o.wKda * kda + o.wHero * hero + (o.wPts || 0) * pts) / wsum;
   const win = g ? st.w / g : null;
-  return { score: raw * 100, raw, rank, elo, eloRaw, kda, kdaRaw, kdaRel: st?.kdaRel ?? null, kdaExp: st?.kdaExp ?? null, hero, win, conf, enough: conf >= 0.5, g, closeG: st?.closeG || 0, closeW: st?.closeW || 0 };
+  return { score: raw * 100, raw, rank, elo, eloRaw, kda, kdaRaw, pts, ptsRaw, ptsMax: st ? st.ptsMax || 0 : 0, kdaRel: st?.kdaRel ?? null, kdaExp: st?.kdaExp ?? null, hero, win, conf, enough: conf >= 0.5, g, closeG: st?.closeG || 0, closeW: st?.closeW || 0 };
 }
 
 
@@ -305,7 +317,7 @@ function statsRows(rows, P, so) {
     const p = P.get(s.pid);
     const sc = playerScore(s, p, so);
     return { pid: s.pid, name: p.name, rank: rankIdx(p), g: s.g, w: s.w, l: s.g - s.w, wr: pctNum(s.w, s.g), rwr: pctNum(s.rw, s.rg), dwr: pctNum(s.dw, s.dg),
-      rg: s.rg, rw: s.rw, dg: s.dg, dw: s.dw, streak: s.streak, kda: s.kdaG ? (s.k + s.a) / Math.max(1, s.d) : -1, kdaStr: s.kdaG ? `${(s.k / s.kdaG).toFixed(1)}/${(s.d / s.kdaG).toFixed(1)}/${(s.a / s.kdaG).toFixed(1)}` : '',
+      rg: s.rg, rw: s.rw, dg: s.dg, dw: s.dw, streak: s.streak, pts: s.pts || 0, kda: s.kdaG ? (s.k + s.a) / Math.max(1, s.d) : -1, kdaStr: s.kdaG ? `${(s.k / s.kdaG).toFixed(1)}/${(s.d / s.kdaG).toFixed(1)}/${(s.a / s.kdaG).toFixed(1)}` : '',
       pos: Object.entries(s.pos).sort((a, b) => b[1].g - a[1].g).slice(0, 2).map(([k, v]) => `${POS_SHORT[k]} ${v.g}场`).join('，'),
       hero: Object.entries(s.heroes).sort((a, b) => b[1].g - a[1].g).slice(0, 3).map(([k, v]) => `${k} ${v.w}/${v.g}`).join('，'),
       sc, score: sc.score };
@@ -327,8 +339,10 @@ function buildReport({ title, st, ms, rows, P, data }) {
   if (byName.size) { L.push('', '## 称号'); for (const { b, who } of byName.values()) L.push(`- ${b.icon} **${b.name}**：${who.map(pid => pname(P, pid)).join('、')}（${badges[who[0]].find(x => x.name === b.name).detail}）`); }
   const pr = predictionReport(st.preds);
   if (pr.decisive) { L.push('', '## 预测回看', `- 赛前 Elo 预测准确率 ${pct(pr.hit, pr.decisive)}（有倾向的 ${pr.decisive} 场），Brier ${pr.brier.toFixed(3)}`); const u = pr.upsets[0]; if (u) { const m = ms.find(x => x.id === u.id); L.push(`- 最大爆冷：${u.date} ${u.id}，赛前只给 ${Math.round((1 - u.surprise) * 100)}% 的${u.winner === 'radiant' ? '天辉' : '夜魇'}赢了${m ? `（${(m[u.winner] || []).map(s => pname(P, s.pid)).join('、')}）` : ''}`); } }
-  L.push('', '## 排行（按评分，前 10）', '| # | 选手 | 评分 | 场次 | 胜率 | KDA | 连胜/负 |', '|---|---|---|---|---|---|---|');
-  byScore.slice(0, 10).forEach((r, i) => L.push(`| ${i + 1} | ${r.name} | ${r.score.toFixed(1)} | ${r.g} | ${pct(r.w, r.g)} | ${r.kda >= 0 ? r.kda.toFixed(2) : '-'} | ${r.streak > 0 ? r.streak + '连胜' : r.streak < 0 ? -r.streak + '连败' : '-'} |`));
+  const byPts = [...data].sort((a, b) => b.pts - a.pts || b.w - a.w)[0];
+  if (byPts) L.push(`- **积分王**：${byPts.name} ${byPts.pts} 分（${byPts.w} 胜 ${byPts.l} 负，胜 +${PTS_WIN} / 负 +${PTS_LOSS}）`);
+  L.push('', '## 排行（按评分，前 10）', '| # | 选手 | 评分 | 积分 | 场次 | 胜率 | KDA | 连胜/负 |', '|---|---|---|---|---|---|---|---|');
+  byScore.slice(0, 10).forEach((r, i) => L.push(`| ${i + 1} | ${r.name} | ${r.score.toFixed(1)} | ${r.pts} | ${r.g} | ${pct(r.w, r.g)} | ${r.kda >= 0 ? r.kda.toFixed(2) : '-'} | ${r.streak > 0 ? r.streak + '连胜' : r.streak < 0 ? -r.streak + '连败' : '-'} |`));
   const duos = Object.values(st.duos).filter(d => d.g >= 2 && P.has(d.a) && P.has(d.b));
   if (duos.length) { const best = [...duos].sort((a, b) => b.w / b.g - a.w / a.g || b.g - a.g)[0], worst = [...duos].sort((a, b) => a.w / a.g - b.w / b.g || b.g - a.g)[0]; L.push('', '## 搭档', `- 最佳：${pname(P, best.a)} + ${pname(P, best.b)}，${best.w}/${best.g}`, `- 最差：${pname(P, worst.a)} + ${pname(P, worst.b)}，${worst.w}/${worst.g}`); }
   const heroes = Object.values(st.heroes).sort((a, b) => b.g - a.g).slice(0, 5);
@@ -454,5 +468,5 @@ const PATCH_NAME = { 39: '7.20', 40: '7.21', 41: '7.22', 42: '7.23', 43: '7.24',
 const rankFromTier = tier => { const t = Math.floor(tier / 10); if (!t || t > 8) return null; return { rank: RANKS[t - 1], stars: t === 8 ? 0 : (tier % 10 || 1) }; }; // 冠绝一世无星级
 const fmtClock = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 
-return { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, computeStats, LANE_EDGE, COMEBACK_GOLD, replayPid, replayStats, FIGHT_GAP, FIGHT_MIN, teamfights, computeBadges, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP, heroScore, playerScore, leagueOf, rankIdx, pname, pct, pctNum, statsRows, buildReport, LOBBY_NAME, GAME_MODE_NAME, LANE_ROLE_NAME, LEAVER_NAME, REGION_NAME, PATCH_NAME, rankFromTier, fmtClock, guessPositions, parseOpenDotaMatch, pwesportsMatch, compactReplay, importParsed, steam32, parseReplayJson, replaySidePlayer, accNear };
+return { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, computeStats, LANE_EDGE, COMEBACK_GOLD, replayPid, replayStats, FIGHT_GAP, FIGHT_MIN, teamfights, computeBadges, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP, heroScore, playerScore, leagueOf, rankIdx, pname, pct, pctNum, PTS_WIN, PTS_LOSS, ptsOf, scoreWsum, statsRows, buildReport, LOBBY_NAME, GAME_MODE_NAME, LANE_ROLE_NAME, LEAVER_NAME, REGION_NAME, PATCH_NAME, rankFromTier, fmtClock, guessPositions, parseOpenDotaMatch, pwesportsMatch, compactReplay, importParsed, steam32, parseReplayJson, replaySidePlayer, accNear };
 });

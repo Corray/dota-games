@@ -65,6 +65,9 @@
             <label class="grow">Steam ID <span class="hint">可选，用于查询比赛时自动识别选手</span>
               <input id="p-account" type="text" inputmode="numeric" placeholder="好友代码 / 32 位或 64 位 ID">
             </label>
+            <label class="narrow">MMR <span class="hint">真实天梯分，可选</span>
+              <input id="p-mmr" type="number" inputmode="numeric" min="0" max="20000" step="1" placeholder="如 5200">
+            </label>
           </div>
           <div class="form-actions">
             <button type="submit" class="primary" id="p-submit">添加选手</button>
@@ -76,7 +79,7 @@
       <details class="card">
         <summary>批量导入选手</summary>
         <p class="hint">每行一个选手，用逗号分隔：<code>昵称, 段位[星级], 位置, 英雄</code><br>
-          位置和英雄用 <code>/</code> 分隔，第 5 列可选 Steam ID。例：<code>小明, 传奇3, 1/2, 影魔/敌法师, 123456789</code></p>
+          位置和英雄用 <code>/</code> 分隔，第 5 列可选 Steam ID，第 6 列可选 MMR。例：<code>小明, 传奇3, 1/2, 影魔/敌法师, 123456789, 5200</code></p>
         <textarea id="bulk-text" rows="6" placeholder="小明, 传奇3, 1/2, 影魔/敌法师&#10;老王, 万古流芳, 4/5, 莱恩/巫医"></textarea>
         <div class="form-actions">
           <button type="button" class="primary" id="bulk-import">导入</button>
@@ -93,7 +96,7 @@
         <div class="table-wrap">
           <table class="tbl sortable" id="player-table">
             <thead><tr>
-              <th data-key="name">昵称</th><th data-key="rank">段位</th><th>位置</th><th>擅长英雄</th><th data-key="score" class="num" title="段位 / 对手加权(Elo) / 相对 KDA / 英雄 四项加权，0-100。悬停看拆解，权重在「统计」页调">评分</th><th data-key="g" class="num">场次</th><th data-key="wr" class="num">胜率</th><th></th>
+              <th data-key="name">昵称</th><th data-key="rank">段位</th><th>位置</th><th>擅长英雄</th><th data-key="score" class="num" title="段位 / 对手加权(Elo) / 相对 KDA / 英雄 / 积分 五项加权，0-100。悬停看拆解，权重在「统计」页调">评分</th><th data-key="pts" class="num" title="内战积分：赢一场 +10，输一场 +2">积分</th><th data-key="mmr" class="num" title="真实天梯分（手填）">MMR</th><th data-key="g" class="num">场次</th><th data-key="wr" class="num">胜率</th><th></th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -251,6 +254,7 @@
       <label class="inline" title="Elo 对手加权：按时间逐场更新，赢强队加得多、输弱队扣得多，比裸胜率多看了对手是谁">对手加权<input id="sw-elo" type="number" min="0" max="100"></label>
       <label class="inline" title="相对同号位平均 KDA 的倍数，辅助和核心各比各的；等于平均记 50 分，2 倍封顶">KDA<input id="sw-kda" type="number" min="0" max="100"></label>
       <label class="inline">英雄<input id="sw-hero" type="number" min="0" max="100"></label>
+      <label class="inline" title="内战积分（赢 +10 / 输 +2）÷ 范围内最高积分；多打多得，不做样本收缩">积分<input id="sw-pts" type="number" min="0" max="100"></label>
       <select id="sw-mode" title="「常用英雄」这一项怎么算">
         <option value="main">主力英雄战绩</option>
         <option value="pool">英雄池广度</option>
@@ -266,7 +270,8 @@
         <thead><tr>
           <th data-key="name">选手</th>
           <th data-key="rank">段位</th>
-          <th data-key="score" class="num" title="段位 / 对手加权(Elo) / 相对 KDA / 常用英雄 四项按权重加权，0-100">评分</th>
+          <th data-key="score" class="num" title="段位 / 对手加权(Elo) / 相对 KDA / 常用英雄 / 积分 五项按权重加权，0-100">评分</th>
+          <th data-key="pts" class="num" title="内战积分：赢一场 +10，输一场 +2（只算当前筛选范围）">积分</th>
           <th data-key="g" class="num">场次</th>
           <th data-key="w" class="num">胜</th>
           <th data-key="l" class="num">负</th>
