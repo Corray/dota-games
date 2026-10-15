@@ -69,7 +69,7 @@ const ui = {
   activeTeam: 'radiant',
   draft: newDraft(),
   poolSearch: '',
-  matchFilter: { pid: '', q: '' },
+  matchFilter: { pid: '', q: '', league: '' },
   statsSort: { key: 'wr', dir: -1 },
 };
 
@@ -755,6 +755,9 @@ function saveMatch() {
   const pack = s => { const o = { pid: s.pid, pos: s.pos || 0, hero: (s.hero || '').trim() }; if (s.kda) o.kda = s.kda; return o; };
   const match = { id, date, duration: dur > 0 ? dur : null, note: $('#m-note').value.trim(), radiant: r.map(pack), dire: d.map(pack), winner: ui.draft.winner, createdAt: Date.now() };
   if (ui.draftScore) match.score = ui.draftScore;
+  const lg = Number($('#m-league').value.trim());
+  if (Number.isInteger(lg) && lg > 0) match.leagueId = lg;
+  else if (ui.editingMatch && $('#m-league').value.trim() === '' && ui.draftLeagueCleared) match.leagueId = 0;   // 编辑时手动清空 = 明确不属于任何联赛
   if (ui.editingMatch) {
     const i = state.matches.findIndex(m => m.id === ui.editingMatch);
     const old = state.matches[i] || {};
@@ -806,8 +809,8 @@ function prefillMatch(radiantPids, direPids, meta = {}) {
   switchTab('record'); window.scrollTo({ top: 0 });
 }
 function resetMatchForm() {
-  ui.editingMatch = null; ui.draft = newDraft(); ui.activeTeam = 'radiant'; ui.draftScore = null;
-  $('#m-id').value = ''; $('#m-date').value = today(); $('#m-duration').value = ''; $('#m-note').value = '';
+  ui.editingMatch = null; ui.draft = newDraft(); ui.activeTeam = 'radiant'; ui.draftScore = null; ui.draftLeagueCleared = false;
+  $('#m-id').value = ''; $('#m-date').value = today(); $('#m-duration').value = ''; $('#m-note').value = ''; $('#m-league').value = '';
   $('#match-form-title').textContent = '新比赛';
   $('#btn-cancel-match').classList.add('hidden');
   renderTeams();
@@ -817,6 +820,7 @@ function startEditMatch(m) {
   const fill = arr => { const a = [null, null, null, null, null]; arr.slice(0, 5).forEach((s, i) => a[i] = { pid: s.pid, pos: s.pos || 0, hero: s.hero || '', kda: s.kda }); return a; };
   ui.draft = { radiant: fill(m.radiant), dire: fill(m.dire), winner: m.winner };
   $('#m-id').value = m.id; $('#m-date').value = m.date; $('#m-duration').value = m.duration || ''; $('#m-note').value = m.note || '';
+  $('#m-league').value = leagueOf(m) || ''; ui.draftLeagueCleared = false;
   $('#match-form-title').textContent = '编辑比赛：' + m.id;
   $('#btn-cancel-match').classList.remove('hidden');
   switchTab('record');
@@ -827,10 +831,14 @@ function startEditMatch(m) {
 (function initMatches() {
   $('#mf-player').addEventListener('change', e => { ui.matchFilter.pid = e.target.value; renderMatches(); });
   $('#mf-q').addEventListener('input', e => { ui.matchFilter.q = e.target.value; renderMatches(); });
+  $('#mf-league').addEventListener('change', e => { ui.matchFilter.league = e.target.value; renderMatches(); });
+  $('#btn-league-fill').addEventListener('click', fillMissingLeagues);
+  $('#m-league').addEventListener('input', e => { ui.draftLeagueCleared = e.target.value.trim() === ''; });
   $('#match-table').addEventListener('click', e => {
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const m = state.matches.find(m => m.id === b.dataset.id); if (!m) return;
     if (b.dataset.act === 'edit') startEditMatch(m);
+    else if (b.dataset.act === 'league') nameLeague(leagueOf(m));
     else if (b.dataset.act === 'replay') { if (m.replay) showReplayModal(m); else loadReplay(m, b); }
     else if (b.dataset.act === 'del') {
       if (!confirm(`删除比赛 ${m.id}？`)) return;
@@ -1034,12 +1042,17 @@ function renderMatches() {
   const list = [...state.matches]
     .sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0))
     .filter(m => !cur || [...m.radiant, ...m.dire].some(s => s.pid === cur))
-    .filter(m => !q || m.id.toLowerCase().includes(q) || (m.note || '').toLowerCase().includes(q) || [...m.radiant, ...m.dire].some(s => (s.hero || '').includes(q) || pname(P, s.pid).toLowerCase().includes(q)));
-  $('#match-count').textContent = state.matches.length;
+    .filter(m => leagueMatch(m, ui.matchFilter.league))
+    .filter(m => !q || m.id.toLowerCase().includes(q) || String(leagueOf(m) || '') === q || (m.note || '').toLowerCase().includes(q) || [...m.radiant, ...m.dire].some(s => (s.hero || '').includes(q) || pname(P, s.pid).toLowerCase().includes(q)));
+  ui.matchFilter.league = fillLeagueSelect($('#mf-league'), ui.matchFilter.league);
+  const missing = leagueMissing().length, fillBtn = $('#btn-league-fill');
+  fillBtn.classList.toggle('hidden', READONLY || !missing || leagueFillBusy);
+  fillBtn.textContent = `补联赛 ID（${missing}）`;
+  $('#match-count').textContent = list.length === state.matches.length ? state.matches.length : `${list.length} / ${state.matches.length}`;
   $('#match-empty').classList.toggle('hidden', list.length > 0);
   $('#match-table tbody').innerHTML = list.map(m => `<tr>
     <td><strong>${esc(m.id)}</strong>${m.note ? `<div class="hint">${esc(m.note)}</div>` : ''}</td>
-    <td>${esc(m.date)}</td>
+    <td>${esc(m.date)}${leagueOf(m) ? `<div class="hint">${READONLY ? esc(leagueLabel(leagueOf(m))) : `<button type="button" class="link" data-act="league" data-id="${esc(m.id)}" title="点击给这个联赛起名字（只存本机）">${esc(leagueLabel(leagueOf(m)))}</button>`}</div>` : ''}</td>
     <td><span class="side ${m.winner}">${m.winner === 'radiant' ? '天辉胜' : '夜魇胜'}</span></td>
     <td class="wrap">${lineupHtml(P, m.radiant, m.winner === 'radiant')}</td>
     <td class="wrap">${lineupHtml(P, m.dire, m.winner === 'dire')}</td>
@@ -1051,7 +1064,7 @@ function renderMatches() {
 // ============ 统计 ============
 let lastStatsRows = [];
 (function initStats() {
-  ['#sf-from', '#sf-to', '#sf-min'].forEach(s => $(s).addEventListener('input', renderStats));
+  ['#sf-from', '#sf-to', '#sf-min', '#sf-league'].forEach(s => $(s).addEventListener('input', renderStats));
   $('#stats-table thead').addEventListener('click', e => {
     const th = e.target.closest('th[data-key]'); if (!th) return;
     const k = th.dataset.key;
@@ -1094,9 +1107,57 @@ let lastStatsRows = [];
   $('#badge-board').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
 })();
 
+// ============ 联赛 ID ============
+/* match.leagueId：查询 / 联赛导入时记下；老比赛没有的，录像解析里带的 leagueId 也算。0 = 查过、确实不属于任何联赛 */
+const leagueOf = m => m.leagueId != null ? (Number(m.leagueId) || 0) : (Number(m.replay?.leagueId) || 0);   // 手填 / 清空过的优先于录像里带的
+const leagueMatch = (m, sel) => !sel || (sel === 'none' ? !leagueOf(m) : String(leagueOf(m)) === sel);
+const LEAGUE_NAME_KEY = 'dota-league-names';   // 联赛 ID → 自己起的名字，只存本机
+const leagueNames = () => { try { return JSON.parse(localStorage.getItem(LEAGUE_NAME_KEY)) || {}; } catch { return {}; } };
+const leagueLabel = id => { const n = leagueNames()[id]; return n ? `${n}（${id}）` : `联赛 ${id}`; };
+// 下拉框：出现过的联赛按场次多到少，另加「无联赛 ID」；当前选中的联赛已不存在时退回全部。返回实际选中值
+function fillLeagueSelect(sel, cur) {
+  const cnt = new Map(); let none = 0;
+  for (const m of state.matches) { const l = leagueOf(m); if (l) cnt.set(l, (cnt.get(l) || 0) + 1); else none++; }
+  const ids = [...cnt.keys()].sort((a, b) => cnt.get(b) - cnt.get(a) || b - a);
+  if (cur && cur !== 'none' && !cnt.has(Number(cur))) cur = '';
+  if (cur === 'none' && !none) cur = '';
+  sel.innerHTML = `<option value="">${sel.id === 'sf-league' ? '全部' : '全部联赛'}</option>`
+    + ids.map(id => `<option value="${id}">${esc(leagueLabel(id))} · ${cnt.get(id)} 场</option>`).join('')
+    + (none && ids.length ? `<option value="none">无联赛 ID · ${none} 场</option>` : '');
+  sel.value = cur || '';
+  sel.closest('label, select')?.classList.toggle('hidden', !ids.length && !cur);
+  return cur || '';
+}
+// 能补的：纯数字比赛编号、没记联赛 ID（0 表示查过，不算）、录像解析里也没有
+const leagueMissing = () => state.matches.filter(m => m.leagueId == null && !Number(m.replay?.leagueId) && /^\d{6,}$/.test(m.id));
+let leagueFillBusy = false;
+async function fillMissingLeagues() {
+  const todo = leagueMissing(); if (!todo.length || leagueFillBusy) return;
+  if (!confirm(`对 ${todo.length} 场没记联赛 ID 的比赛逐场查完美世界，补上联赛 ID？大约需要 ${Math.ceil(todo.length * 0.6)} 秒。`)) return;
+  leagueFillBusy = true; renderMatches();
+  const fetchT = (url, ms) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t)); };
+  let ok = 0, found = 0, fail = 0;
+  for (const m of todo) {
+    try { const raw = await fetchPwesports(m.id, fetchT); m.leagueId = Number(raw.leagueid) || 0; ok++; if (m.leagueId) found++; }
+    catch (e) { fail++; }
+    if (ok && ok % 10 === 0) save();
+    await new Promise(r => setTimeout(r, 300));
+  }
+  leagueFillBusy = false; save(); renderMatches(); if (ui.tab === 'stats') renderStats();
+  toast(`已查 ${ok} 场，其中 ${found} 场属于联赛${fail ? `，${fail} 场查询失败（可再点一次重试）` : ''}`, fail ? 'err' : 'ok');
+}
+// 给联赛起个名字（只存本机）
+function nameLeague(id) {
+  const names = leagueNames(); const v = prompt(`给联赛 ${id} 起个名字（只存在本机，留空清除）：`, names[id] || '');
+  if (v === null) return;
+  if (v.trim()) names[id] = v.trim(); else delete names[id];
+  try { localStorage.setItem(LEAGUE_NAME_KEY, JSON.stringify(names)); } catch { }
+  renderMatches(); if (ui.tab === 'stats') renderStats();
+}
+
 function filteredMatches() {
-  const from = $('#sf-from').value, to = $('#sf-to').value;
-  return state.matches.filter(m => (!from || m.date >= from) && (!to || m.date <= to));
+  const from = $('#sf-from').value, to = $('#sf-to').value, lg = $('#sf-league').value;
+  return state.matches.filter(m => (!from || m.date >= from) && (!to || m.date <= to) && leagueMatch(m, lg));
 }
 
 // 评分列的悬停明细：拆出四项各自贡献了多少分
@@ -1114,6 +1175,7 @@ const scoreTip = sc => {
 
 function renderStats() {
   const P = playerMap();
+  fillLeagueSelect($('#sf-league'), $('#sf-league').value);
   const ms = filteredMatches();
   const st = computeStats(ms);
   const minG = Math.max(1, Number($('#sf-min').value) || 1);
@@ -1227,7 +1289,8 @@ function buildReport() {
   const from = $('#sf-from').value, to = $('#sf-to').value;
   const dates = ms.map(m => m.date).sort();
   const range = from || to ? `${from || dates[0] || '?'} ~ ${to || dates[dates.length - 1] || '?'}` : (dates.length ? `${dates[0]} ~ ${dates[dates.length - 1]}` : '无');
-  const L = [`# Dota 2 内战战报（${range}）`, '', `- 共 **${st.total}** 场，天辉 ${st.radiantWins} 胜 / 夜魇 ${st.total - st.radiantWins} 胜${st.avgDuration ? `，平均 ${Math.round(st.avgDuration)} 分钟` : ''}，${rows.length} 人出场`];
+  const lgSel = $('#sf-league').value;
+  const L = [`# Dota 2 内战战报（${range}${lgSel ? ' · ' + leagueLabel(lgSel) : ''}）`, '', `- 共 **${st.total}** 场，天辉 ${st.radiantWins} 胜 / 夜魇 ${st.total - st.radiantWins} 胜${st.avgDuration ? `，平均 ${Math.round(st.avgDuration)} 分钟` : ''}，${rows.length} 人出场`];
   if (!st.total) return L.join('\n');
   const byScore = [...data].sort((a, b) => b.score - a.score);
   const mvp = byScore.find(r => r.g >= 3) || byScore[0];
@@ -1713,7 +1776,7 @@ function parseOpenDotaMatch(m) {
   }; };
   const isRad = p => (typeof p.isRadiant === 'boolean' ? p.isRadiant : p.player_slot < 128);
   return {
-    id: String(m.match_id), date, duration: m.duration ? Math.round(m.duration / 60) : null,
+    id: String(m.match_id), date, duration: m.duration ? Math.round(m.duration / 60) : null, leagueId: Number(m.leagueid || m.league_id) || 0,
     winner: m.radiant_win ? 'radiant' : 'dire', score: [m.radiant_score ?? '?', m.dire_score ?? '?'],
     radiant: guessPositions(m.players.filter(isRad).map(mk)), dire: guessPositions(m.players.filter(p => !isRad(p)).map(mk)),
   };
@@ -1729,7 +1792,7 @@ async function fetchPwesports(id, fetchT) {
   if (!m) throw Object.assign(new Error('尚未收录这场比赛（刚结束的比赛通常要等几分钟）'), { notFound: true });
   return {
     match_id: m.match_id, start_time: m.start_time, duration: m.duration, radiant_win: !!m.radiant_win,
-    radiant_score: m.radiant_score, dire_score: m.dire_score, source: 'pwesports',
+    radiant_score: m.radiant_score, dire_score: m.dire_score, source: 'pwesports', leagueid: Number(m.leagueid) || 0,
     players: (m.players || []).map(p => {
       const hidden = !p.nickname || p.nickname === '匿名';
       return { account_id: p.account_id || null, personaname: hidden ? '' : p.nickname, hidden_name: hidden, player_slot: p.player_slot,
@@ -1882,6 +1945,7 @@ function applyImport(saveNow) {
   let skipped = 0;
   for (const side of ['radiant', 'dire']) { let k = 0; parsed[side].forEach((r, i) => { const c = chosen.get(side + i); if (c.pid === '__skip') { skipped++; return; } if (k < 5) ui.draft[side][k++] = { pid: c.pid, pos: c.pos, hero: r.hero, kda: r.kda }; }); }
   $('#m-id').value = parsed.id; $('#m-date').value = parsed.date; $('#m-duration').value = parsed.duration || '';
+  if (parsed.leagueId) $('#m-league').value = parsed.leagueId;
   ui.draftScore = parsed.score.every(x => Number.isFinite(Number(x))) ? parsed.score.map(Number) : null;   // 保存时写成 m.score 字段，不只靠备注里的文字
   if (!$('#m-note').value.trim()) $('#m-note').value = `${parsed.source} 导入 · 比分 ${parsed.score.join(':')}`;
   $('#match-form-title').textContent = exists ? '编辑比赛：' + parsed.id : `新比赛（${parsed.source} 导入）`;
@@ -1989,7 +2053,7 @@ function importParsedMatch(parsed, { leagueId, autoNew, source }) {
   const radiant = side(parsed.radiant), dire = side(parsed.dire);
   if (!radiant.length || !dire.length) throw new Error('两队都没有可识别的选手（未勾选自动新建）');
   const match = { id: parsed.id, date: parsed.date, duration: parsed.duration, note: `${label} · 比分 ${parsed.score.join(':')}`, radiant, dire, winner: parsed.winner, createdAt: Date.now() };
-  if (leagueId) match.leagueId = Number(leagueId);
+  if (leagueId || parsed.leagueId) match.leagueId = Number(leagueId || parsed.leagueId);
   if (parsed.score.every(x => Number.isFinite(Number(x)))) match.score = parsed.score.map(Number);
   const i = state.matches.findIndex(m => m.id === match.id);
   if (i >= 0) state.matches[i] = { ...match, createdAt: state.matches[i].createdAt, ...(state.matches[i].replay ? { replay: state.matches[i].replay } : {}) }; else state.matches.push(match);
@@ -2110,7 +2174,7 @@ $('#m-id').addEventListener('keydown', e => { if (e.key === 'Enter') { e.prevent
 function buildSnapshot() {
   const players = state.players.map(p => ({ id: p.id, name: p.name, rank: p.rank, stars: p.stars, positions: p.positions, heroes: p.heroes }));
   const matches = state.matches.map(m => ({
-    id: m.id, date: m.date, winner: m.winner, duration: m.duration, createdAt: m.createdAt,
+    id: m.id, date: m.date, winner: m.winner, duration: m.duration, createdAt: m.createdAt, leagueId: leagueOf(m) || undefined,
     radiant: (m.radiant || []).map(x => ({ pid: x.pid, hero: x.hero, pos: x.pos, kda: x.kda })),
     dire: (m.dire || []).map(x => ({ pid: x.pid, hero: x.hero, pos: x.pos, kda: x.kda })),
   }));

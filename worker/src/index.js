@@ -161,7 +161,7 @@ async function readMeta(db) {
 function stripSnapshot(data, meta) {
   const players = (data.players || []).map(p => ({ id: p.id, name: p.name, rank: p.rank, stars: p.stars, positions: p.positions, heroes: p.heroes }));
   const matches = (data.matches || []).map(m => ({
-    id: m.id, date: m.date, winner: m.winner, duration: m.duration, createdAt: m.createdAt,
+    id: m.id, date: m.date, winner: m.winner, duration: m.duration, createdAt: m.createdAt, leagueId: (m.leagueId != null ? Number(m.leagueId) : Number(m.replay?.leagueId)) || undefined,
     radiant: (m.radiant || []).map(x => ({ pid: x.pid, hero: x.hero, pos: x.pos, kda: x.kda })),
     dire: (m.dire || []).map(x => ({ pid: x.pid, hero: x.hero, pos: x.pos, kda: x.kda })),
   }));

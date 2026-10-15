@@ -127,6 +127,9 @@
       <label class="narrow">时长(分)
         <input id="m-duration" type="number" min="1" max="300" placeholder="可选">
       </label>
+      <label class="narrow">联赛 ID
+        <input id="m-league" type="text" inputmode="numeric" maxlength="12" placeholder="可选" title="Dota 2 联赛 ID（内战房间绑定的 league_id）。查询比赛时自动填，也可手填，用于按联赛筛选">
+      </label>
       <label class="grow">备注
         <input id="m-note" type="text" maxlength="80" placeholder="可选">
       </label>
@@ -176,6 +179,8 @@
       <h2>比赛列表 <span class="count" id="match-count">0</span></h2>
       <div class="inline-actions">
         <select id="mf-player"><option value="">全部选手</option></select>
+        <select id="mf-league" title="按 Dota 2 联赛 ID 筛选"><option value="">全部联赛</option></select>
+        <button type="button" class="ghost hidden" id="btn-league-fill" title="对还没记联赛 ID 的比赛逐场查完美世界，补上联赛 ID">补联赛 ID</button>
         <input id="mf-q" type="search" placeholder="搜索比赛 ID / 英雄 / 备注">
         <button type="button" id="btn-league" title="输入联赛 ID，拉取该联赛全部比赛并批量导入（经中转）">联赛导入</button>
         <button type="button" id="btn-replay-all" title="把所有还没解析的比赛逐场拉取录像解析（分路 / 经济曲线 / 击杀时间线）；一血 / 翻盘称号只看已解析的比赛">批量解析</button>
@@ -202,6 +207,7 @@
       <div class="inline-actions wrap">
         <label class="inline">从 <input id="sf-from" type="date"></label>
         <label class="inline">到 <input id="sf-to" type="date"></label>
+        <label class="inline">联赛 <select id="sf-league" title="只统计该 Dota 2 联赛 ID 下的比赛"><option value="">全部</option></select></label>
         <label class="inline">最少场次 <input id="sf-min" type="number" min="1" value="1" style="width:4.5em"></label>
         <button type="button" class="ghost" id="btn-report" title="把当前范围的战况写成 Markdown 战报：MVP / Elo 变动 / 称号 / 预测回看 / 排行 / 搭档 / 热门英雄，直接粘到群里">生成战报</button>
         <button type="button" class="ghost" id="btn-copy-md" title="把选手排行复制为 Markdown 表格">复制 Markdown</button>
