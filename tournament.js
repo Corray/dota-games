@@ -1,4 +1,4 @@
-/* 正式比赛（赛事）模块 —— 固定 5 人队 + 公共替补池；阶段化赛制：瑞士轮 / 单循环积分 / 单败 / 双败；每场系列赛 BO1/3/5/7
+/* 正式比赛（赛事）模块 —— 固定 5 人队 + 公共替补池；阶段化赛制：瑞士轮 / 单循环积分 / BO2 积分循环 / 分组循环 / 单败 / 双败；每场系列赛 BO1/3/5/7（BO2 积分循环固定 BO2）
    依赖 app.js 末尾暴露的 window.DotaApp，数据存在 state.tournaments，随 app.js 的 save() 一起写入 localStorage */
 (() => {
 'use strict';
@@ -8,8 +8,11 @@ const { $, $$, esc, uid, today, toast, showModal, hideModal, playerMap, pname, r
 const S = () => A.state;
 const T = () => (S().tournaments || (S().tournaments = []));
 
-const STAGE_TYPES = { swiss: '瑞士轮', rr: '单循环积分', groups: '分组循环', se: '单败淘汰', de: '双败淘汰' };
-const GROUP_TYPES = ['swiss', 'rr', 'groups'];          // 小组类阶段：有积分榜、允许加赛
+const STAGE_TYPES = { swiss: '瑞士轮', rr: '单循环积分', rr2: '小组 BO2 积分循环', groups: '分组循环', se: '单败淘汰', de: '双败淘汰' };
+const GROUP_TYPES = ['swiss', 'rr', 'rr2', 'groups'];   // 小组类阶段：有积分榜、允许加赛
+/* BO2 积分循环：所有队互打一次，每场固定打满 2 局，赢 1 局得 1 分（2:0 得 2 分、1:1 各 1 分、0:2 得 0 分）。
+   按积分排名，取前 N 晋级；积分相同卡在晋级线上时加赛 BO1（多队同分打加赛小循环，按加赛胜场排） */
+const isPts = st => st.type === 'rr2';
 const TB_ROUND = 1000;                                  // 加赛所在的特殊轮次编号
 const GN = i => String.fromCharCode(65 + i);            // 组名 A/B/C…
 const regRounds = st => st.rounds.filter(r => !r.extra);
@@ -22,7 +25,7 @@ const teamOf = (t, id) => t.teams.find(x => x.id === id) || null;
 const tname = (t, id) => id ? (teamOf(t, id)?.name || '(已删队)') : '—';
 const stageOf = (t, sid) => t.stages.find(s => s.id === sid);
 const seriesOf = (st, id) => st.series.find(s => s.id === id);
-const needWins = s => Math.ceil(s.bo / 2);
+const needWins = s => s.bo === 2 ? 2 : Math.ceil(s.bo / 2);   // BO2 不分胜负，打满 2 局
 const wins = s => s.games.reduce((o, g) => (o[g.w]++, o), { a: 0, b: 0 });
 const pairKey = (x, y) => [x, y].sort().join('|');
 const avgRank = (team, P) => { const v = team.players.filter(Boolean).map(pid => P.get(pid)).filter(Boolean); return v.length ? v.reduce((s, p) => s + rankIdx(p), 0) / v.length : 0; };
@@ -43,16 +46,20 @@ function resolve(st, s) {
   };
   const ra = slot('a'), rb = slot('b');
   const { a: wa, b: wb } = wins(s);
-  let done = false, winner = null, loser = null;
+  let done = false, winner = null, loser = null, draw = false;
   if (ra.v && rb.v) { done = true; }
   else if (ra.v && rb.team) { done = true; winner = rb.team; }
   else if (rb.v && ra.team) { done = true; winner = ra.team; }
   else if (ra.team && rb.team) {
-    const n = needWins(s);
-    if (wa >= n) { done = true; winner = ra.team; loser = rb.team; }
-    else if (wb >= n) { done = true; winner = rb.team; loser = ra.team; }
+    if (s.bo === 2) {                                             // BO2：打满 2 局才结束，1:1 算平
+      if (wa + wb >= 2) { done = true; if (wa > wb) { winner = ra.team; loser = rb.team; } else if (wb > wa) { winner = rb.team; loser = ra.team; } else draw = true; }
+    } else {
+      const n = needWins(s);
+      if (wa >= n) { done = true; winner = ra.team; loser = rb.team; }
+      else if (wb >= n) { done = true; winner = rb.team; loser = ra.team; }
+    }
   }
-  return { a: ra.team, b: rb.team, voidA: ra.v, voidB: rb.v, done, winner, loser, wa, wb, bye: done && (ra.v || rb.v) };
+  return { a: ra.team, b: rb.team, voidA: ra.v, voidB: rb.v, done, winner, loser, wa, wb, draw, bye: done && (ra.v || rb.v) };
 }
 const stageDone = st => st.status === 'running' && st.series.length > 0 && st.series.every(s => resolve(st, s).done) && (st.type !== 'swiss' || regRounds(st).length >= st.roundCount);
 // 本阶段晋级队数 / 每组晋级数
@@ -71,7 +78,7 @@ function downstreamHasGames(st, sid) {
 // ============ 积分榜（瑞士轮 / 单循环） ============
 function standings(st, t, groupIdx = null) {
   const ids = groupIdx == null ? st.teamIds : (st.groups?.[groupIdx] || []);
-  const rows = new Map(ids.map((id, i) => [id, { id, seed: st.teamIds.indexOf(id), w: 0, l: 0, gw: 0, gl: 0, opps: [], byes: 0, tb: 0 }]));
+  const rows = new Map(ids.map((id, i) => [id, { id, seed: st.teamIds.indexOf(id), w: 0, l: 0, d: 0, gw: 0, gl: 0, pts: 0, opps: [], byes: 0, tb: 0 }]));
   const tb = new Map(), h2h = new Map();   // 加赛结果 / 常规交手结果，都只用来决并列
   for (const s of st.series) {
     const r = resolve(st, s);
@@ -80,16 +87,34 @@ function standings(st, t, groupIdx = null) {
     const A_ = rows.get(r.a), B_ = rows.get(r.b); if (!A_ || !B_) continue;
     if (s.tb) { if (r.done) { tb.set(pairKey(r.a, r.b), r.winner); rows.get(r.winner).tb++; } continue; }
     A_.gw += r.wa; A_.gl += r.wb; B_.gw += r.wb; B_.gl += r.wa;
-    if (r.done) { A_.opps.push(r.b); B_.opps.push(r.a); h2h.set(pairKey(r.a, r.b), r.winner); if (r.winner === r.a) { A_.w++; B_.l++; } else { B_.w++; A_.l++; } }
+    if (r.done) { A_.opps.push(r.b); B_.opps.push(r.a); h2h.set(pairKey(r.a, r.b), r.winner); if (r.draw) { A_.d++; B_.d++; } else if (r.winner === r.a) { A_.w++; B_.l++; } else { B_.w++; A_.l++; } }
   }
-  for (const x of rows.values()) x.buch = x.opps.reduce((s, o) => s + (rows.get(o)?.w || 0), 0);
+  for (const x of rows.values()) { x.buch = x.opps.reduce((s, o) => s + (rows.get(o)?.w || 0), 0); x.pts = x.gw + x.byes * 2; }
   const byKey = (m, x, y) => { const w = m.get(pairKey(x.id, y.id)); return w ? (w === x.id ? -1 : 1) : 0; };
+  // BO2 积分循环：积分 → 加赛胜场（多队同分打加赛小循环，按胜场数排）→ 常规交手 → 种子
+  if (isPts(st)) return [...rows.values()].sort((x, y) => y.pts - x.pts || y.tb - x.tb || byKey(tb, x, y) || byKey(h2h, x, y) || x.seed - y.seed);
   return [...rows.values()].sort((x, y) =>
     y.w - x.w ||
     byKey(tb, x, y) ||                                     // 同分先看加赛
     x.l - y.l ||
     (st.type === 'swiss' ? y.buch - x.buch : byKey(h2h, x, y)) ||   // 瑞士轮看对手分；循环赛看常规交手
     (y.gw - y.gl) - (x.gw - x.gl) || x.seed - y.seed);
+}
+
+// BO2 积分循环：卡在晋级线上（最终阶段看冠军位）积分相同、还没靠加赛分出线内线外的队；没有则返回 []
+function cutoffTies(st, t, isLast) {
+  if (!isPts(st) || st.status !== 'running') return [];
+  const rows = standings(st, t), n = isLast ? 1 : advanceCount(st);
+  if (n <= 0 || n >= rows.length || rows[n - 1].pts !== rows[n].pts) return [];
+  const p = rows[n].pts, tied = rows.filter(x => x.pts === p);
+  const inZone = tied.filter(x => rows.indexOf(x) < n), out = tied.filter(x => rows.indexOf(x) >= n);
+  if (Math.min(...inZone.map(x => x.tb)) > Math.max(...out.map(x => x.tb))) return [];   // 加赛已分出先后
+  return tied.map(x => x.id);
+}
+// 给同分队安排 BO1 加赛：两队一场，多队打小循环
+function addTiebreaks(st, ids) {
+  if (!st.rounds.some(r => r.extra)) st.rounds.push({ idx: TB_ROUND, label: '加赛', date: '' , extra: true });
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) st.series.push(mkSeries(st, TB_ROUND, { a: ids[i], b: ids[j], bo: 1, tb: true, group: null }));
 }
 
 // ============ 赛程生成 ============
@@ -208,6 +233,7 @@ function startStage(t, idx, teamIds) {
   const st = t.stages[idx];
   st.teamIds = teamIds; st.series = []; st.rounds = []; st.status = 'running';
   if (st.type === 'rr') genRoundRobin(st);
+  else if (st.type === 'rr2') { st.bo = 2; genRoundRobin(st); }
   else if (st.type === 'groups') genGroups(st);
   else if (st.type === 'swiss') genSwissRound(st, t);
   else if (st.type === 'se') genSingleElim(st);
@@ -217,7 +243,7 @@ function startStage(t, idx, teamIds) {
 
 // 阶段最终名次（用于晋级 / 榜单）
 function placements(st, t) {
-  if (st.type === 'swiss' || st.type === 'rr') return standings(st, t).map(x => x.id);
+  if (st.type === 'swiss' || st.type === 'rr' || st.type === 'rr2') return standings(st, t).map(x => x.id);
   if (st.type === 'groups') {
     const tables = (st.groups || []).map((_, gi) => standings(st, t, gi).map(x => x.id));
     const out = []; const maxLen = Math.max(0, ...tables.map(x => x.length));
@@ -540,7 +566,7 @@ function viewFormat(t) {
       <td>${i + 1}</td>
       <td><input type="text" data-f="name" value="${esc(s.name)}" maxlength="20" ${dis} style="min-width:120px"></td>
       <td><select data-f="type" ${dis}>${Object.entries(STAGE_TYPES).map(([k, v]) => `<option value="${k}" ${s.type === k ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
-      <td><select data-f="bo" ${dis}>${BO_OPTS.map(b => `<option value="${b}" ${s.bo === b ? 'selected' : ''}>BO${b}</option>`).join('')}</select></td>
+      <td>${s.type === 'rr2' ? '<span title="每场固定打满 2 局，赢 1 局得 1 分">BO2（固定）</span>' : `<select data-f="bo" ${dis}>${BO_OPTS.map(b => `<option value="${b}" ${s.bo === b ? 'selected' : ''}>BO${b}</option>`).join('')}</select>`}</td>
       <td>${s.type === 'se' || s.type === 'de' ? `<select data-f="finalBo" ${dis}><option value="0" ${!s.finalBo ? 'selected' : ''}>同上</option>${BO_OPTS.map(b => `<option value="${b}" ${s.finalBo === b ? 'selected' : ''}>BO${b}</option>`).join('')}</select>` : '<span class="hint">—</span>'}</td>
       <td>${s.type === 'swiss' ? `<label class="inline">轮数 <input type="number" data-f="roundCount" min="1" max="15" value="${s.roundCount || 5}" ${dis} style="width:4.5em"></label>`
         : s.type === 'groups' ? `<label class="inline">分 <input type="number" data-f="groupCount" min="2" max="16" value="${s.groupCount || 2}" ${dis} style="width:4em"> 组</label>`
@@ -555,10 +581,11 @@ function viewFormat(t) {
       ${editable ? `<button type="button" id="tn-add-stage">＋ 添加阶段</button>
       <button type="button" id="tn-preset" title="瑞士轮小组赛 5 轮 BO1，前 8 名进入单败淘汰赛 BO3，决赛 BO5">套用模板：瑞士轮 → 八强 / 半决赛 / 决赛</button>
       <button type="button" id="tn-preset2" title="所有队单循环积分 BO1，前 4 名双败淘汰 BO3，总决赛 BO5">模板：单循环 → 四强双败</button>
-      <button type="button" id="tn-preset3" title="分 2 组各打单循环 BO1，每组前 2 名进入单败淘汰赛 BO3，决赛 BO5；队多时把组数或每组晋级数调大">模板：分组循环 → 淘汰赛</button>` : '<span class="hint">赛事已开始，只能改尚未开始的阶段。</span>'}
+      <button type="button" id="tn-preset3" title="分 2 组各打单循环 BO1，每组前 2 名进入单败淘汰赛 BO3，决赛 BO5；队多时把组数或每组晋级数调大">模板：分组循环 → 淘汰赛</button>
+      <button type="button" id="tn-preset4" title="所有队互打一场 BO2（赢 1 局得 1 分），积分前 4 名进入单败淘汰赛 BO3，决赛 BO5；同分卡在晋级线上加赛 BO1">模板：BO2 积分循环 → 淘汰赛</button>` : '<span class="hint">赛事已开始，只能改尚未开始的阶段。</span>'}
     </div>
     <div class="table-wrap"><table class="tbl tn-format"><thead><tr><th>#</th><th>阶段名</th><th>赛制</th><th>每场</th><th>决赛</th><th>参数</th><th>晋级</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">还没有阶段</td></tr>'}</tbody></table></div>
-    <p class="hint" style="margin-top:10px">瑞士轮：每轮按当前积分配对、避免重赛，奇数队自动轮空（算胜一场）；排名依次看 胜场 → 对手分（Buchholz）→ 小局净胜。单循环：所有队互打一次，同分看交手。分组循环：按种子蛇形分组（1→A、2→B、3→B、4→A…），组内单循环，可选每组前 N 名晋级或淘汰末 N 名，淘汰赛种子按 A1、B1、A2、B2… 排，同组不会首轮相遇。小组类阶段都可以「添加加赛」决并列：加赛不算胜负场，只在两队同分时决定先后。单败 / 双败：按上一阶段名次排种子（1 vs 8、2 vs 7 …），队数不足 2 的幂自动轮空；双败总决赛只打一场，不设加赛。每轮日期可在阶段页里填，用来安排「第 1 天 / 第 2 天」。</p>`;
+    <p class="hint" style="margin-top:10px">瑞士轮：每轮按当前积分配对、避免重赛，奇数队自动轮空（算胜一场）；排名依次看 胜场 → 对手分（Buchholz）→ 小局净胜。单循环：所有队互打一次，同分看交手。BO2 积分循环：所有队互打一场 BO2（固定打满 2 局），赢 1 局得 1 分，2:0 得 2 分、1:1 各 1 分；按积分排名取前 N 晋级，积分相同卡在晋级线上时页面会提示加赛 BO1（三队以上同分打加赛小循环）。分组循环：按种子蛇形分组（1→A、2→B、3→B、4→A…），组内单循环，可选每组前 N 名晋级或淘汰末 N 名，淘汰赛种子按 A1、B1、A2、B2… 排，同组不会首轮相遇。小组类阶段都可以「添加加赛」决并列：加赛不算胜负场，只在两队同分时决定先后。单败 / 双败：按上一阶段名次排种子（1 vs 8、2 vs 7 …），队数不足 2 的幂自动轮空；双败总决赛只打一场，不设加赛。每轮日期可在阶段页里填，用来安排「第 1 天 / 第 2 天」。</p>`;
 }
 
 // ---- 阶段 ----
@@ -571,7 +598,7 @@ function seriesCard(t, st, s) {
     ${s.label || s.tb ? `<div class="series-label">${esc(s.label || '加赛')}</div>` : ''}
     ${side(r.a, r.voidA, r.wa, r.done && r.winner && r.winner === r.a)}
     ${side(r.b, r.voidB, r.wb, r.done && r.winner && r.winner === r.b)}
-    <div class="series-foot">BO${s.bo}${s.games.some(g => g.matchId) ? ' · 📎' : ''}</div>
+    <div class="series-foot">BO${s.bo}${r.draw ? ' · 平' : ''}${s.games.some(g => g.matchId) ? ' · 📎' : ''}</div>
   </div>`;
 }
 function viewStage(t, idx) {
@@ -582,7 +609,10 @@ function viewStage(t, idx) {
   if (st.status === 'pending') return `<p class="empty">「${esc(st.name)}」尚未开始。上一阶段结束后点「进入下一阶段」。</p>`;
   const advN = advanceCount(st);
   const advTxt = st.type === 'groups' ? `${st.advMode === 'cut' ? `每组淘汰末 ${st.advN || 1} 名` : `每组前 ${st.advN || 2} 名`}，共 ${advN} 队晋级` : `前 ${advN} 名晋级`;
-  if (done && st.status === 'running') top = `<div class="tn-banner">本阶段所有场次已结束。${isLast ? '<button type="button" class="primary" id="tn-finish">结束赛事，生成最终榜单</button>' : `<button type="button" class="primary" id="tn-next">进入下一阶段：${esc(t.stages[idx + 1].name)}（${advTxt}）</button>`}</div>`;
+  const ties = cutoffTies(st, t, isLast);
+  const pendingTb = st.series.some(x => x.tb && !resolve(st, x).done);
+  if (ties.length && !pendingTb && st.series.filter(x => !x.tb).every(x => resolve(st, x).done)) top = `<div class="tn-banner">${ties.map(id => esc(tname(t, id))).join('、')} 同积分卡在${isLast ? '冠军位' : `晋级线（前 ${advanceCount(st)} 名）`}上，需要加赛 BO1${ties.length > 2 ? '（打加赛小循环，按加赛胜场排）' : ''}。<button type="button" class="primary" id="tn-auto-tb" data-ids="${ties.join(',')}">安排加赛</button></div>`;
+  else if (done && st.status === 'running') top = `<div class="tn-banner">本阶段所有场次已结束。${isLast ? '<button type="button" class="primary" id="tn-finish">结束赛事，生成最终榜单</button>' : `<button type="button" class="primary" id="tn-next">进入下一阶段：${esc(t.stages[idx + 1].name)}（${advTxt}）</button>`}</div>`;
   if (st.status === 'done') top = `<div class="tn-banner done">本阶段已结束。${isLast ? '' : `晋级：${advancing(st, t).map(id => esc(tname(t, id))).join('、')}`}</div>`;
   const roundBlock = (rd, filter = () => true) => {
     const list = st.series.filter(s => s.round === rd.idx && filter(s));
@@ -592,6 +622,8 @@ function viewStage(t, idx) {
   };
   const sortedRounds = [...st.rounds].sort((a, b) => a.idx - b.idx);
   const tbBtn = st.status === 'running' ? `<button type="button" class="ghost" id="tn-tiebreak" title="两队同分时安排一场加赛决定名次；加赛不计入胜负场">＋ 添加加赛</button>` : '';
+  const ptsTable = (rows, advCount) => `<div class="table-wrap"><table class="tbl"><thead><tr><th>#</th><th>队伍</th><th class="num" title="赢 1 局得 1 分">积分</th><th class="num">2:0</th><th class="num">1:1</th><th class="num">0:2</th><th class="num">小局</th><th class="num" title="同分时的加赛胜场">加赛</th></tr></thead>
+        <tbody>${rows.map((x, i) => `<tr class="${!isLast && i < advCount ? 'adv' : ''}"><td>${i + 1}</td><td>${esc(tname(t, x.id))}</td><td class="num"><b>${x.pts}</b></td><td class="num">${x.w}</td><td class="num">${x.d}</td><td class="num">${x.l}</td><td class="num">${x.gw}-${x.gl}</td><td class="num">${x.tb || '-'}</td></tr>`).join('')}</tbody></table></div>`;
   const table = (rows, advCount, showBuch) => `<div class="table-wrap"><table class="tbl"><thead><tr><th>#</th><th>队伍</th><th class="num">胜</th><th class="num">负</th>${showBuch ? '<th class="num" title="对手分：所有已交手对手的胜场之和">对手分</th>' : ''}<th class="num">小局</th></tr></thead>
         <tbody>${rows.map((x, i) => `<tr class="${!isLast && i < advCount ? 'adv' : ''}"><td>${i + 1}</td><td>${esc(tname(t, x.id))}${x.byes ? ' <span class="hint">(轮空×' + x.byes + ')</span>' : ''}${x.tb ? ' <span class="hint" title="加赛获胜">加赛✓</span>' : ''}</td><td class="num">${x.w}</td><td class="num">${x.l}</td>${showBuch ? `<td class="num">${x.buch}</td>` : ''}<td class="num">${x.gw}-${x.gl}</td></tr>`).join('')}</tbody></table></div>`;
   if (st.type === 'groups') {
@@ -600,7 +632,7 @@ function viewStage(t, idx) {
         <div class="tn-stage-grid"><div>${sortedRounds.map(rd => roundBlock(rd, s => s.group === gi)).join('')}</div>
         <div>${table(standings(st, t, gi), perGroupAdv(st, g.length), false)}${!isLast ? `<p class="hint">高亮 = 本组晋级区（${perGroupAdv(st, g.length)} 队）</p>` : ''}</div></div></div>`).join('')}`;
   }
-  if (st.type === 'swiss' || st.type === 'rr') {
+  if (st.type === 'swiss' || st.type === 'rr' || st.type === 'rr2') {
     const rows = standings(st, t);
     const reg = regRounds(st);
     const canNext = st.type === 'swiss' && st.status === 'running' && reg.length < st.roundCount && st.series.every(s => resolve(st, s).done);
@@ -611,7 +643,7 @@ function viewStage(t, idx) {
         <div class="tn-toolbar">${canNext ? `<button type="button" class="primary" id="tn-swiss-next">生成第 ${reg.length + 1} 轮（共 ${st.roundCount} 轮）</button>` : ''}${canUndoRound ? `<button type="button" class="ghost" id="tn-swiss-undo">撤销第 ${reg.length} 轮配对</button>` : ''}${tbBtn}${st.type === 'swiss' ? `<span class="hint">已生成 ${reg.length} / ${st.roundCount} 轮</span>` : ''}</div>
         ${sortedRounds.map(rd => roundBlock(rd)).join('')}
       </div>
-      <div><h3>积分榜</h3>${table(rows, advN, st.type === 'swiss')}
+      <div><h3>积分榜</h3>${isPts(st) ? ptsTable(rows, advN) : table(rows, advN, st.type === 'swiss')}
         ${!isLast ? `<p class="hint">高亮 = 当前晋级区（前 ${advN} 名）</p>` : ''}</div>
     </div>`;
   }
@@ -733,13 +765,13 @@ function openSeries(sid) {
       <td class="num">${locked ? '' : `${!g.matchId ? `<button type="button" class="mini" data-act="link" data-gi="${i}">关联记录</button>` : `<button type="button" class="mini" data-act="unlink" data-gi="${i}">取消关联</button>`} <button type="button" class="mini danger" data-act="del-game" data-gi="${i}">删除</button>`}</td></tr>`;
   };
   const n = needWins(s);
-  showModal(`<h2>${esc(seriesTitle(t, st, s))} <span class="hint">BO${s.bo}，先胜 ${n} 局</span></h2>
+  showModal(`<h2>${esc(seriesTitle(t, st, s))} <span class="hint">BO${s.bo}，${s.bo === 2 ? '打满 2 局，赢 1 局得 1 分' : `先胜 ${n} 局`}</span></h2>
     <div class="tn-vs">
       <div class="tn-vs-team ${r.winner === r.a ? 'won' : ''}"><div class="tn-vs-name">${esc(tname(t, r.a))}</div><div class="tn-vs-score">${r.wa}</div><div class="tn-roster">${roster(r.a)}</div></div>
       <div class="vs">VS</div>
       <div class="tn-vs-team ${r.winner === r.b ? 'won' : ''}"><div class="tn-vs-name">${esc(tname(t, r.b))}</div><div class="tn-vs-score">${r.wb}</div><div class="tn-roster">${roster(r.b)}</div></div>
     </div>
-    ${r.done ? `<p class="tn-banner done" style="margin:8px 0">系列赛结束，<b>${esc(tname(t, r.winner))}</b> 胜出${locked ? '（后续场次已开始，本场已锁定）' : ''}</p>` : ''}
+    ${r.done ? `<p class="tn-banner done" style="margin:8px 0">${r.draw ? '系列赛结束，<b>1 : 1 平</b>，两队各得 1 分' : `系列赛结束，<b>${esc(tname(t, r.winner))}</b> 胜出${s.bo === 2 ? `（2 : 0，得 2 分）` : ''}`}${locked ? '（后续场次已开始，本场已锁定）' : ''}</p>` : ''}
     ${!locked && !r.done ? `<div class="tn-subs"><div><b>本局替补</b> <span class="hint">有人缺席时从公共替补池换人，会记在这一局；${pool.length ? `替补池 ${pool.length} 人可用` : '替补池为空，去「队伍与替补」添加'}</span></div>${subPanel('a')}${subPanel('b')}</div>
     <div class="form-actions" style="flex-wrap:wrap">
       <button type="button" class="win-btn radiant" data-act="score" data-w="a">${esc(tname(t, r.a))} 胜一局</button>
@@ -820,7 +852,7 @@ function openTiebreakModal(t, st) {
   const options = st.type === 'groups' ? (st.groups || []).map((g, gi) => `<optgroup label="${GN(gi)} 组">${opt(g)}</optgroup>`).join('') : opt(st.teamIds);
   showModal(`<h2>添加加赛</h2>
     <p class="hint">加赛用来决出并列名次：结果不计入胜负场和小局，只在两队胜场相同时决定谁排前面。${st.type === 'groups' ? '只能安排同组两队。' : ''}</p>
-    <div class="row wrap"><label>队伍 A<select id="tb-a">${options}</select></label><label>队伍 B<select id="tb-b">${options}</select></label><label class="narrow">局数<select id="tb-bo">${BO_OPTS.map(b => `<option value="${b}" ${b === st.bo ? 'selected' : ''}>BO${b}</option>`).join('')}</select></label></div>
+    <div class="row wrap"><label>队伍 A<select id="tb-a">${options}</select></label><label>队伍 B<select id="tb-b">${options}</select></label><label class="narrow">局数<select id="tb-bo">${BO_OPTS.map(b => `<option value="${b}" ${b === (isPts(st) ? 1 : st.bo) ? 'selected' : ''}>BO${b}</option>`).join('')}</select></label></div>
     <div class="form-actions"><button type="button" class="primary" id="tb-ok">添加</button><button type="button" class="ghost" id="tb-cancel">取消</button></div>`);
   const selB = $('#tb-b'); if (selB.options.length > 1) selB.selectedIndex = 1;
   $('#tb-cancel').onclick = hideModal;
@@ -866,6 +898,7 @@ A.hooks.afterSaveMatch.push(m => {
 function newStage(type = 'swiss') { return { id: uid(), name: STAGE_TYPES[type], type, bo: 1, finalBo: 0, roundCount: 5, thirdPlace: false, advance: 8, groupCount: 2, advMode: 'top', advN: 2, status: 'pending', teamIds: [], rounds: [], series: [] }; }
 function presetGroupsSE() { return [{ ...newStage('groups'), name: '小组赛（分组循环）', bo: 1, groupCount: 2, advMode: 'top', advN: 2 }, { ...newStage('se'), name: '淘汰赛', bo: 3, finalBo: 5, thirdPlace: false }]; }
 function presetSwissSE() { return [{ ...newStage('swiss'), name: '小组赛（瑞士轮）', bo: 1, roundCount: 5, advance: 8 }, { ...newStage('se'), name: '淘汰赛', bo: 3, finalBo: 5, thirdPlace: false }]; }
+function presetRR2SE() { return [{ ...newStage('rr2'), name: '小组赛（BO2 积分循环）', bo: 2, advance: 4 }, { ...newStage('se'), name: '淘汰赛', bo: 3, finalBo: 5, thirdPlace: false }]; }
 function presetRRDE() { return [{ ...newStage('rr'), name: '循环赛', bo: 1, advance: 4 }, { ...newStage('de'), name: '四强双败', bo: 3, finalBo: 5 }]; }
 
 function validateStart(t) {
@@ -959,6 +992,7 @@ root().addEventListener('click', e => {
   if (id === 'tn-preset') { t.stages = presetSwissSE(); save(); render(); toast('已套用模板', 'ok'); return; }
   if (id === 'tn-preset2') { t.stages = presetRRDE(); save(); render(); toast('已套用模板', 'ok'); return; }
   if (id === 'tn-preset3') { t.stages = presetGroupsSE(); save(); render(); toast('已套用模板', 'ok'); return; }
+  if (id === 'tn-preset4') { t.stages = presetRR2SE(); save(); render(); toast('已套用模板', 'ok'); return; }
   const sr = e.target.closest('tr[data-stage] button[data-act]');
   if (sr) { const tr = sr.closest('tr'); const i = t.stages.findIndex(x => x.id === tr.dataset.stage); const act = sr.dataset.act;
     if (act === 'del') t.stages.splice(i, 1); else if (act === 'up' && i > 0) [t.stages[i - 1], t.stages[i]] = [t.stages[i], t.stages[i - 1]]; else if (act === 'down' && i < t.stages.length - 1) [t.stages[i + 1], t.stages[i]] = [t.stages[i], t.stages[i + 1]];
@@ -968,8 +1002,9 @@ root().addEventListener('click', e => {
   if (id === 'tn-swiss-next' && st) { genSwissRound(st, t); save(); render(); toast(`第 ${st.rounds.length} 轮配对已生成`, 'ok'); return; }
   if (id === 'tn-swiss-undo' && st) { const reg = regRounds(st); const last = reg[reg.length - 1]; st.rounds = st.rounds.filter(r => r !== last); st.series = st.series.filter(s => s.round !== last.idx); save(); render(); return; }
   if (id === 'tn-tiebreak' && st) { openTiebreakModal(t, st); return; }
-  if (id === 'tn-next' && st) { if (!stageDone(st)) return toast('本阶段还有未打完的场次', 'err'); st.status = 'done'; const adv = advancing(st, t); startStage(t, tui.stageIdx + 1, adv); save(); tui.sub = 'stage' + tui.stageIdx; render(); toast(`已进入「${t.stages[tui.stageIdx].name}」，${adv.length} 队晋级`, 'ok'); return; }
-  if (id === 'tn-finish' && st) { if (!stageDone(st)) return toast('还有未打完的场次', 'err'); st.status = 'done'; t.status = 'done'; save(); tui.sub = 'board'; render(); toast('赛事已结束 🏆', 'ok'); return; }
+  if (id === 'tn-auto-tb' && st) { const ids = (b.dataset.ids || '').split(',').filter(Boolean); if (ids.length < 2) return; addTiebreaks(st, ids); save(); render(); toast(`已安排 ${ids.length * (ids.length - 1) / 2} 场 BO1 加赛，点卡片记分`, 'ok'); return; }
+  if (id === 'tn-next' && st) { if (!stageDone(st)) return toast('本阶段还有未打完的场次', 'err'); if (cutoffTies(st, t, false).length) return toast('晋级线上还有同分的队，先安排加赛', 'err'); st.status = 'done'; const adv = advancing(st, t); startStage(t, tui.stageIdx + 1, adv); save(); tui.sub = 'stage' + tui.stageIdx; render(); toast(`已进入「${t.stages[tui.stageIdx].name}」，${adv.length} 队晋级`, 'ok'); return; }
+  if (id === 'tn-finish' && st) { if (!stageDone(st)) return toast('还有未打完的场次', 'err'); if (cutoffTies(st, t, true).length) return toast('冠军位还有同分的队，先安排加赛', 'err'); st.status = 'done'; t.status = 'done'; save(); tui.sub = 'board'; render(); toast('赛事已结束 🏆', 'ok'); return; }
   const sc = e.target.closest('.series.clickable[data-series]');
   if (sc) { openSeries(sc.dataset.series); }
 });
@@ -988,7 +1023,7 @@ root().addEventListener('change', e => {
   if (el.matches('input[data-team][data-f=name]')) { const tm = teamOf(t, el.dataset.team); tm.name = el.value.trim() || tm.name; save(); render(); return; }
   const tr = el.closest('tr[data-stage]');
   if (tr) { const s = t.stages.find(x => x.id === tr.dataset.stage); const f = el.dataset.f; if (!s || !f) return;
-    if (f === 'thirdPlace') s.thirdPlace = el.checked; else if (f === 'name') s.name = el.value.trim() || s.name; else if (f === 'advMode') s.advMode = el.value; else if (f === 'groupCount') { s.groupCount = Number(el.value) || 2; delete s.drawGroups; } else if (f === 'type') { const wasDefault = Object.values(STAGE_TYPES).includes(s.name); s.type = el.value; if (wasDefault) s.name = STAGE_TYPES[s.type]; } else s[f] = Number(el.value) || 0;
+    if (f === 'thirdPlace') s.thirdPlace = el.checked; else if (f === 'name') s.name = el.value.trim() || s.name; else if (f === 'advMode') s.advMode = el.value; else if (f === 'groupCount') { s.groupCount = Number(el.value) || 2; delete s.drawGroups; } else if (f === 'type') { const wasDefault = Object.values(STAGE_TYPES).includes(s.name); s.type = el.value; if (wasDefault) s.name = STAGE_TYPES[s.type]; if (s.type === 'rr2') s.bo = 2; else if (s.bo === 2) s.bo = 1; } else s[f] = Number(el.value) || 0;
     save(); render(); return; }
   if (el.matches('input[type=date][data-round]')) { const st = t.stages[tui.stageIdx]; const rd = st?.rounds.find(r => r.idx === Number(el.dataset.round)); if (rd) { rd.date = el.value; save(); } return; }
 });
