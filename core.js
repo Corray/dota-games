@@ -308,6 +308,23 @@ function playerScore(st, p, opt) {
 
 const leagueOf = m => m.leagueId != null ? (Number(m.leagueId) || 0) : (Number(m.replay?.leagueId) || 0);   // 手填 / 清空过的优先于录像里带的
 
+// ============ 英雄统计（可按号位筛） ============
+// pos：0 = 全部号位（与 computeStats 的 heroes 完全一致）；1-5 = 只算打这个号位时的使用；'none' = 没填号位的
+function heroStats(matches, pos = 0) {
+  const heroes = {};
+  for (const m of matches) for (const side of ['radiant', 'dire']) {
+    const won = m.winner === side;
+    for (const s of m[side] || []) {
+      if (!s.hero) continue;
+      if (pos === 'none' ? !!s.pos : (pos && (s.pos || 0) !== Number(pos))) continue;
+      const h = heroes[s.hero] ||= { hero: s.hero, g: 0, w: 0, users: {} }; h.g++; if (won) h.w++;
+      h.users[s.pid] = (h.users[s.pid] || 0) + 1;
+    }
+  }
+  return heroes;
+}
+const HERO_POS_OPTS = [[0, '全部号位'], [1, POS_SHORT[1]], [2, POS_SHORT[2]], [3, POS_SHORT[3]], [4, POS_SHORT[4]], [5, POS_SHORT[5]], ['none', '未填号位']];
+
 // ============ 统计页排行行数据（网页统计表、战报、小程序共用） ============
 // rows = computeStats 的选手对象（已按最少场次 / 在名单内过滤）
 function statsRows(rows, P, so) {
@@ -466,5 +483,5 @@ const PATCH_NAME = { 39: '7.20', 40: '7.21', 41: '7.22', 42: '7.23', 43: '7.24',
 const rankFromTier = tier => { const t = Math.floor(tier / 10); if (!t || t > 8) return null; return { rank: RANKS[t - 1], stars: t === 8 ? 0 : (tier % 10 || 1) }; }; // 冠绝一世无星级
 const fmtClock = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 
-return { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, computeStats, LANE_EDGE, COMEBACK_GOLD, replayPid, replayStats, FIGHT_GAP, FIGHT_MIN, teamfights, computeBadges, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP, heroScore, playerScore, leagueOf, rankIdx, pname, pct, pctNum, PTS_WIN, PTS_LOSS, ptsOf, scoreWsum, statsRows, buildReport, LOBBY_NAME, GAME_MODE_NAME, LANE_ROLE_NAME, LEAVER_NAME, REGION_NAME, PATCH_NAME, rankFromTier, fmtClock, guessPositions, parseOpenDotaMatch, pwesportsMatch, compactReplay, importParsed, steam32, parseReplayJson, replaySidePlayer, accNear };
+return { RANKS, POS_NAME, POS_SHORT, HERO_BY_ID, HEROES, matchScore, CLOSE_MARGIN, movFactor, computeStats, LANE_EDGE, COMEBACK_GOLD, replayPid, replayStats, FIGHT_GAP, FIGHT_MIN, teamfights, computeBadges, predictMatch, predictionReport, topKey, SCORE_DEF, ELO_BASE, ELO_K, RANK_MAX, KDA_REL_CAP, heroScore, playerScore, leagueOf, rankIdx, pname, pct, pctNum, PTS_WIN, PTS_LOSS, ptsOf, scoreWsum, heroStats, HERO_POS_OPTS, statsRows, buildReport, LOBBY_NAME, GAME_MODE_NAME, LANE_ROLE_NAME, LEAVER_NAME, REGION_NAME, PATCH_NAME, rankFromTier, fmtClock, guessPositions, parseOpenDotaMatch, pwesportsMatch, compactReplay, importParsed, steam32, parseReplayJson, replaySidePlayer, accNear };
 });

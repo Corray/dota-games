@@ -130,7 +130,11 @@
 
   <!-- 英雄 -->
   <block wx:if="{{sec === 'hero'}}">
-    <view class="muted" style="margin-bottom:8rpx">共 {{heroTotal}} 个英雄</view>
+    <scroll-view scroll-x class="secs" enable-flex>
+      <view wx:for="{{heroPosOpts}}" wx:key="v" class="chip sm {{heroPos === item.v ? 'on' : ''}}" data-v="{{item.v}}" bindtap="onHeroPos">{{item.t}}</view>
+    </scroll-view>
+    <view class="muted" style="margin-bottom:8rpx">共 {{heroTotal}} 个英雄{{heroPos !== '0' ? '（只算打这个号位时的使用）' : ''}}</view>
+    <view class="empty" wx:if="{{!heroTotal}}">这个号位还没有英雄记录</view>
     <view class="hrow" wx:for="{{heroes}}" wx:key="hero">
       <view class="row between"><text class="b">{{item.hero}}</text><text class="muted">{{item.g}} 场 · {{item.w}} 胜 · <text class="b">{{item.wr}}</text></text></view>
       <view class="row wrapr"><text class="who" wx:for="{{item.users}}" wx:for-item="u" wx:key="pid" data-pid="{{u.pid}}" catchtap="open">{{u.name}}<text class="muted">×{{u.c}}</text></text></view>

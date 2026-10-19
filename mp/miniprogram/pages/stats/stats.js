@@ -16,7 +16,7 @@ Page({
     tiles: [], secs: SECS, sec: 'rank',
     rsorts: RSORTS, rsort: 'wr', rdir: -1, rows: [], rtotal: 0, shown: STEP,
     badgeList: [], eloLegend: [], eloTip: '', pred: [], upsets: [],
-    laneRows: [], laneInfo: '', heroes: [], heroTotal: 0, best: [], worst: [],
+    laneRows: [], laneInfo: '', heroes: [], heroTotal: 0, heroPosOpts: C.HERO_POS_OPTS.map(([v, t]) => ({ v: String(v), t })), heroPos: '0', best: [], worst: [],
     showW: false, w: {}, heroModes: HERO_MODES, heroModeIdx: 0, wsum: 0,
   },
 
@@ -182,12 +182,14 @@ Page({
 
   // ---------- 英雄统计 ----------
   renderHero() {
-    const v = this.view();
-    const all = Object.values(v.st.heroes).sort((a, b) => b.g - a.g || pctNum(b.w, b.g) - pctNum(a.w, a.g));
+    const v = this.view(), hp = this.data.heroPos;
+    const all = Object.values(C.heroStats(v.ms, hp === 'none' ? 'none' : Number(hp) || 0)).sort((a, b) => b.g - a.g || pctNum(b.w, b.g) - pctNum(a.w, a.g));
     const n = this._heroN || 40;
     this.setData({ heroTotal: all.length, heroes: all.slice(0, n).map(h => ({ hero: h.hero, g: h.g, w: h.w, wr: pct(h.w, h.g),
       users: Object.entries(h.users).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([pid, c]) => ({ pid, name: S.pname(pid), c })) })) });
   },
+
+  onHeroPos(e) { this._heroN = 40; this.setData({ heroPos: String(e.currentTarget.dataset.v) }); this.renderHero(); },
 
   // ---------- 搭档 ----------
   renderDuo() {

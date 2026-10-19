@@ -810,6 +810,8 @@ let lastStatsRows = [];
   $('#duo-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#duo-worst-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#hero-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
+  $('#hf-pos').innerHTML = DotaCore.HERO_POS_OPTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+  $('#hf-pos').addEventListener('change', renderStats);
   $('#lane-table').addEventListener('click', e => { const b = e.target.closest('button[data-pid]'); if (b) showPlayerDetail(b.dataset.pid); });
   $('#btn-copy-md').addEventListener('click', async () => {
     const head = ['选手', '段位', '评分', '积分', '场次', '胜', '负', '胜率', '天辉', '夜魇', 'KDA', '常用位置', '常用英雄', '连胜/负'];
@@ -950,12 +952,14 @@ function renderStats() {
   </tr>`).join('') : `<tr><td colspan="14" class="empty">没有符合条件的数据</td></tr>`;
   lastStatsRows = data.map(r => [r.name, `${P.get(r.pid).rank}${P.get(r.pid).stars || ''}`, r.score.toFixed(1), r.pts, r.g, r.w, r.l, pct(r.w, r.g), r.rg ? `${pct(r.rw, r.rg)}(${r.rg})` : '-', r.dg ? `${pct(r.dw, r.dg)}(${r.dg})` : '-', r.kda >= 0 ? `${r.kda.toFixed(2)} (${r.kdaStr})` : '-', r.pos || '-', r.hero || '-', r.streak > 0 ? `${r.streak}连胜` : r.streak < 0 ? `${-r.streak}连败` : '-']);
 
-  // 英雄
-  const heroes = Object.values(st.heroes).sort((a, b) => b.g - a.g || pctNum(b.w, b.g) - pctNum(a.w, a.g));
+  // 英雄（可按号位筛，筛选只影响这张表）
+  const hfPos = $('#hf-pos').value === 'none' ? 'none' : Number($('#hf-pos').value) || 0;
+  const heroes = Object.values(DotaCore.heroStats(ms, hfPos)).sort((a, b) => b.g - a.g || pctNum(b.w, b.g) - pctNum(a.w, a.g));
+  $('#hero-count').textContent = heroes.length ? `${heroes.length} 个英雄${hfPos ? ` · ${hfPos === 'none' ? '未填号位' : POS_NAME[hfPos]}` : ''}` : '';
   $('#hero-table tbody').innerHTML = heroes.length ? heroes.map(h => `<tr>
     <td><strong>${esc(h.hero)}</strong></td><td class="num">${h.g}</td><td class="num">${h.w}</td><td class="num">${pct(h.w, h.g)}</td>
     <td class="wrap">${Object.entries(h.users).sort((a, b) => b[1] - a[1]).map(([pid, n]) => `<button class="link" data-pid="${pid}">${esc(pname(P, pid))}</button><span class="hint">×${n}</span>`).join('　')}</td>
-  </tr>`).join('') : `<tr><td colspan="5" class="empty">比赛里填了英雄才会有统计</td></tr>`;
+  </tr>`).join('') : `<tr><td colspan="5" class="empty">${hfPos ? '这个号位还没有英雄记录' : '比赛里填了英雄才会有统计'}</td></tr>`;
 
   // 对线与节奏（只看已解析的比赛）
   const rsAll = replayStats(ms);
